@@ -14,7 +14,7 @@
   "dependencies": {
     "axios": "^1.7.9",
     "dotenv": "^16.4.7",
-    "playwright": "^1.49.1",
+    "playwright": "1.63.0",
     "systeminformation": "^5.23.5",
     "uuid": "^11.0.3"
   },
