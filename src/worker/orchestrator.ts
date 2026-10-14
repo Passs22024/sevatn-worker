@@ -76,6 +76,8 @@ export class WorkerOrchestrator {
     SanitizedLogger.info('[BOOKING] Booking Execution Engine active. Polling for queued execution jobs...');
 
     let lastStoppedNotice = 0;
+    let lastPassiveNotice = 0;
+    let lastPollNotice = 0;
     let wasPaused = false;
 
     while (this.isRunning) {
@@ -85,6 +87,21 @@ export class WorkerOrchestrator {
         if (now - lastStoppedNotice > 30000) {
           SanitizedLogger.info(`[Worker] Execution is ${this.heartbeat.getDesiredState()} by Super Admin. Job polling paused.`);
           lastStoppedNotice = now;
+        }
+        if (this.activeExecutions === 0) {
+          this.heartbeat.setStatus('IDLE');
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.checkIntervalMs));
+        continue;
+      }
+
+      if (this.maxActiveBookings <= 0) {
+        const now = Date.now();
+        if (now - lastPassiveNotice > 60000) {
+          SanitizedLogger.info(
+            `[BOOKING] Execution Engine in MONITOR-ONLY mode (MAX_ACTIVE_BOOKINGS=${this.maxActiveBookings}). Job claiming disabled. Set MAX_ACTIVE_BOOKINGS >= 1 to enable booking execution.`
+          );
+          lastPassiveNotice = now;
         }
         if (this.activeExecutions === 0) {
           this.heartbeat.setStatus('IDLE');
@@ -115,6 +132,13 @@ export class WorkerOrchestrator {
           } else {
             if (this.activeExecutions === 0) {
               this.heartbeat.setStatus('IDLE');
+            }
+            const now = Date.now();
+            if (now - lastPollNotice > 60000) {
+              SanitizedLogger.info(
+                `[BOOKING] Queue poll: No queued jobs available (Capacity: ${this.activeExecutions}/${this.maxActiveBookings}). Polling every ${this.checkIntervalMs / 1000}s.`
+              );
+              lastPollNotice = now;
             }
           }
         } catch (err: any) {
