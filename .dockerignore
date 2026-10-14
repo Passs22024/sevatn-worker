@@ -1,0 +1,30 @@
+# Ignore dependencies - container will install via npm ci
+node_modules
+
+# Ignore local build output - container will build via RUN npm run build
+dist
+
+# Ignore all secrets and local environment configs
+.env
+.env.*
+!.env.example
+
+# Ignore debug screenshots and failure captures
+debug
+test_debug
+screenshots
+videos
+
+# Ignore logs
+logs
+*.log
+
+# Ignore git and local config
+.git
+.gitignore
+.dockerignore
+.vscode
+.idea
+
+# Ignore test coverage and scripts
+coverage

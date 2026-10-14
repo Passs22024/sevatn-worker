@@ -1,0 +1,23 @@
+[Unit]
+Description=TicketAssist Resilient Worker Engine (Playwright)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/ticketassist/worker
+ExecStart=/usr/bin/node /opt/ticketassist/worker/dist/index.js
+Restart=always
+RestartSec=10
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# Security hardening
+EnvironmentFile=/opt/ticketassist/worker/.env
+LimitNOFILE=65535
+StandardOutput=append:/var/log/ticketassist-worker.log
+StandardError=append:/var/log/ticketassist-worker-error.log
+
+[Install]
+WantedBy=multi-user.target

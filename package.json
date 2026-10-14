@@ -1,0 +1,30 @@
+{
+  "name": "ticketassist-worker",
+  "version": "1.0.0",
+  "description": "TicketAssist Resilient Worker Engine - Playwright, BullMQ, Machine Auth",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:dev": "ts-node src/index.ts",
+    "test": "jest",
+    "pair": "ts-node src/scripts/pair.ts",
+    "clear:queues": "npm --prefix ../api run clear:queues"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "playwright": "^1.49.1",
+    "systeminformation": "^5.23.5",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.10.2",
+    "@types/uuid": "^10.0.0",
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.14",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}

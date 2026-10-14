@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Compiled output (built inside Docker or during local build)
+dist/
+
+# Environment files and credentials
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Playwright failure artifacts and screenshots
+debug/
+test_debug/
+screenshots/
+videos/
+
+# Application logs
+logs/
+*.log
+
+# Test coverage
+coverage/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
