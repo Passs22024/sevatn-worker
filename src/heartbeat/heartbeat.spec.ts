@@ -58,4 +58,35 @@ describe('HeartbeatService Multi-Job Concurrency Tracking', () => {
     heartbeat.addActiveJob('job-1');
     expect(heartbeat.getActiveJobs()).toEqual(['job-1']);
   });
+
+  it('reconciles server desired administrative state and execution permission', async () => {
+    // Initial state is STOPPED
+    expect(heartbeat.getDesiredState()).toBe('STOPPED');
+    expect(heartbeat.isExecutionPermitted()).toBe(false);
+
+    // Mock API returning RUNNING directive
+    mockApiClient.sendHeartbeat.mockResolvedValueOnce({
+      status: 'OK',
+      desiredState: 'RUNNING',
+    });
+
+    heartbeat.setStatus('IDLE');
+    // Allow promise tick
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(heartbeat.getDesiredState()).toBe('RUNNING');
+    expect(heartbeat.isExecutionPermitted()).toBe(true);
+
+    // Mock API returning STOPPED directive
+    mockApiClient.sendHeartbeat.mockResolvedValueOnce({
+      status: 'OK',
+      desiredState: 'STOPPED',
+    });
+
+    heartbeat.setStatus('IDLE');
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(heartbeat.getDesiredState()).toBe('STOPPED');
+    expect(heartbeat.isExecutionPermitted()).toBe(false);
+  });
 });

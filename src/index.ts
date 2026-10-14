@@ -25,6 +25,7 @@ async function bootstrap() {
   // 2. Start Heartbeat Service
   const heartbeat = new HeartbeatService(apiClient, machine.version);
   const heartbeatInterval = parseInt(process.env.HEARTBEAT_INTERVAL_MS || '10000');
+  await heartbeat.init();
   heartbeat.start(heartbeatInterval);
   console.log(`💓 Heartbeat service active (Interval: ${heartbeatInterval / 1000}s)`);
 

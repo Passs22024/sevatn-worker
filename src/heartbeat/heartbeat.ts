@@ -6,11 +6,24 @@ export class HeartbeatService {
   private currentStatus: string = 'IDLE';
   private currentJobId: string | null = null;
   private activeJobIds = new Set<string>();
+  private serverDesiredState: string = 'STOPPED';
 
   constructor(
     private apiClient: ApiClient,
     private version: string,
   ) {}
+
+  getDesiredState(): string {
+    return this.serverDesiredState;
+  }
+
+  isExecutionPermitted(): boolean {
+    return this.serverDesiredState === 'RUNNING';
+  }
+
+  setExecutionPermitted(permitted: boolean) {
+    this.serverDesiredState = permitted ? 'RUNNING' : 'STOPPED';
+  }
 
   addActiveJob(jobId: string) {
     if (jobId) {
@@ -50,6 +63,10 @@ export class HeartbeatService {
     this.sendImmediate().catch(() => {});
   }
 
+  async init() {
+    await this.sendImmediate();
+  }
+
   start(intervalMs: number = 10000) {
     this.sendImmediate().catch(() => {});
     this.timer = setInterval(() => this.sendImmediate().catch(() => {}), intervalMs);
@@ -62,7 +79,7 @@ export class HeartbeatService {
     }
   }
 
-  private async sendImmediate() {
+  public async sendImmediate() {
     try {
       const freeMem = os.freemem();
       const totalMem = os.totalmem();
@@ -82,7 +99,7 @@ export class HeartbeatService {
       const activeList = Array.from(this.activeJobIds);
       const primaryJobId = activeList.length > 0 ? activeList[0] : (this.currentJobId || undefined);
 
-      await this.apiClient.sendHeartbeat({
+      const res = await this.apiClient.sendHeartbeat({
         status: this.currentStatus,
         version: this.version,
         currentJobId: primaryJobId,
@@ -90,9 +107,20 @@ export class HeartbeatService {
         cpuUsage: Math.min(100, Math.max(0, cpuUsage)),
         memoryUsage: Math.min(100, Math.max(0, memoryUsage)),
       });
+
+      if (res && res.desiredState) {
+        const previousState = this.serverDesiredState;
+        this.serverDesiredState = res.desiredState;
+        if (previousState !== res.desiredState) {
+          if (res.desiredState === 'RUNNING') {
+            console.log('[Heartbeat] Super Admin state transitioned to RUNNING. Execution authorized.');
+          } else {
+            console.log(`[Heartbeat] Super Admin state transitioned to ${res.desiredState}. Execution paused.`);
+          }
+        }
+      }
     } catch (err: any) {
-      // Non-fatal logging for network hiccups
-      // console.warn('[Heartbeat] Ping failed:', err?.message);
+      console.warn('[Heartbeat] Ping failed:', err?.response?.data || err?.message);
     }
   }
 }

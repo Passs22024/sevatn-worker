@@ -57,10 +57,12 @@ export class WorkerOrchestrator {
     SanitizedLogger.info('[AVAILABILITY] Availability Discovery Engine initialized.');
 
     while (this.isRunning) {
-      try {
-        await this.discoveryWorker.runDiscoveryPass();
-      } catch (err: any) {
-        SanitizedLogger.error('[AVAILABILITY] Discovery cycle error:', err?.message || err);
+      if (this.heartbeat.isExecutionPermitted()) {
+        try {
+          await this.discoveryWorker.runDiscoveryPass();
+        } catch (err: any) {
+          SanitizedLogger.error('[AVAILABILITY] Discovery cycle error:', err?.message || err);
+        }
       }
 
       await new Promise((resolve) => setTimeout(resolve, this.discoveryIntervalMs));
@@ -73,12 +75,41 @@ export class WorkerOrchestrator {
   private async startExecutionLoop() {
     SanitizedLogger.info('[BOOKING] Booking Execution Engine active. Polling for queued execution jobs...');
 
+    let lastStoppedNotice = 0;
+    let wasPaused = false;
+
     while (this.isRunning) {
+      if (!this.heartbeat.isExecutionPermitted()) {
+        wasPaused = true;
+        const now = Date.now();
+        if (now - lastStoppedNotice > 30000) {
+          SanitizedLogger.info(`[Worker] Execution is ${this.heartbeat.getDesiredState()} by Super Admin. Job polling paused.`);
+          lastStoppedNotice = now;
+        }
+        if (this.activeExecutions === 0) {
+          this.heartbeat.setStatus('IDLE');
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.checkIntervalMs));
+        continue;
+      }
+
+      if (wasPaused) {
+        wasPaused = false;
+        SanitizedLogger.info('[Worker] Execution RESUMED by Super Admin. Resuming job claims & execution polling.');
+        lastStoppedNotice = 0;
+      }
+
       if (this.activeExecutions < this.maxActiveBookings) {
         try {
           const claimResult = await this.apiClient.claimJob();
 
-          if (claimResult.hasJob && claimResult.job) {
+          if (claimResult.stopped) {
+            this.heartbeat.setExecutionPermitted(false);
+            SanitizedLogger.warn(`[Worker] Execution stopped by Super Admin. Halting new job claims.`);
+            if (this.activeExecutions === 0) {
+              this.heartbeat.setStatus('IDLE');
+            }
+          } else if (claimResult.hasJob && claimResult.job) {
             this.activeExecutions++;
             this.processJobAsync(claimResult.jobType, claimResult.job);
           } else {
