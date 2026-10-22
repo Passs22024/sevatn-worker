@@ -1,4 +1,5 @@
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { resolveChromiumPath } from '../browser/browser-manager';
 
 export class BrowserManager {
   private browser: Browser | null = null;
@@ -10,7 +11,7 @@ export class BrowserManager {
 
   async launch(): Promise<Browser> {
     try {
-      this.browser = await chromium.launch({
+      const launchOptions: any = {
         headless: this.isHeadless,
         args: [
           '--no-sandbox',
@@ -19,7 +20,14 @@ export class BrowserManager {
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
         ],
-      });
+      };
+
+      const resolvedExecutable = resolveChromiumPath();
+      if (resolvedExecutable) {
+        launchOptions.executablePath = resolvedExecutable;
+      }
+
+      this.browser = await chromium.launch(launchOptions);
       return this.browser;
     } catch (err: any) {
       console.warn(`[Browser] Native Playwright launch warning:`, err.message);

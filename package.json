@@ -7,6 +7,11 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "start:dev": "ts-node src/index.ts",
+    "setup": "node dist/setup/wizard.js",
+    "setup:dev": "ts-node src/setup/wizard.ts",
+    "control-center": "node dist/control-center/index.js",
+    "control-center:dev": "ts-node src/control-center/index.ts",
+    "build:installer": "powershell -ExecutionPolicy Bypass -File ./installer/build-installer.ps1",
     "test": "jest",
     "pair": "ts-node src/scripts/pair.ts",
     "clear:queues": "npm --prefix ../api run clear:queues"

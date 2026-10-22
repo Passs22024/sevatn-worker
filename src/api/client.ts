@@ -46,8 +46,13 @@ export class ApiClient {
   async sendHeartbeat(data: {
     status: string;
     version?: string;
+    deploymentType?: string;
+    installationId?: string;
+    maxConcurrentJobs?: number;
     currentJobId?: string;
     activeJobIds?: string[];
+    currentActivity?: string;
+    activityDetails?: string;
     cpuUsage?: number;
     memoryUsage?: number;
   }) {

@@ -7,11 +7,19 @@ export class HeartbeatService {
   private currentJobId: string | null = null;
   private activeJobIds = new Set<string>();
   private serverDesiredState: string = 'STOPPED';
+  private currentActivity: string = 'IDLE';
+  private activityDetails: string = 'Idle, waiting for assignments';
 
   constructor(
     private apiClient: ApiClient,
     private version: string,
   ) {}
+
+  setActivity(activity: string, details?: string) {
+    this.currentActivity = activity;
+    if (details) this.activityDetails = details;
+    this.sendImmediate().catch(() => {});
+  }
 
   getDesiredState(): string {
     return this.serverDesiredState;
@@ -99,11 +107,22 @@ export class HeartbeatService {
       const activeList = Array.from(this.activeJobIds);
       const primaryJobId = activeList.length > 0 ? activeList[0] : (this.currentJobId || undefined);
 
+      const deploymentType = process.env.DEPLOYMENT_TYPE
+        ? process.env.DEPLOYMENT_TYPE.toUpperCase()
+        : (process.platform === 'win32' ? 'LOCAL_PC' : (process.env.DOCKER_CONTAINER ? 'DOCKER' : 'CLOUD_VM'));
+      const installationId = process.env.INSTALLATION_ID || os.hostname();
+      const maxConcurrentJobs = process.env.MAX_CONCURRENT_JOBS ? parseInt(process.env.MAX_CONCURRENT_JOBS, 10) : undefined;
+
       const res = await this.apiClient.sendHeartbeat({
         status: this.currentStatus,
         version: this.version,
+        deploymentType,
+        installationId,
+        maxConcurrentJobs,
         currentJobId: primaryJobId,
         activeJobIds: activeList,
+        currentActivity: this.currentActivity,
+        activityDetails: this.activityDetails,
         cpuUsage: Math.min(100, Math.max(0, cpuUsage)),
         memoryUsage: Math.min(100, Math.max(0, memoryUsage)),
       });
