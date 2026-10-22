@@ -26,7 +26,23 @@ export class ApiClient {
   }
 
   setToken(token: string) {
-    this.token = token;
+    this.token = token ? token.trim() : null;
+  }
+
+  getToken(): string | null {
+    return this.token;
+  }
+
+  hasToken(): boolean {
+    return !!this.token && typeof this.token === 'string' && this.token.trim().length > 0;
+  }
+
+  clearToken(): void {
+    this.token = null;
+  }
+
+  getBaseUrl(): string {
+    return this.client.defaults.baseURL || '';
   }
 
   async registerMachine(machineCode: string, machineName: string, version: string) {
@@ -56,11 +72,17 @@ export class ApiClient {
     cpuUsage?: number;
     memoryUsage?: number;
   }) {
+    if (!this.hasToken()) {
+      throw new Error('Worker machine token missing in x-machine-token or Authorization header; heartbeat aborted');
+    }
     const res = await this.client.post('/workers/heartbeat', data);
     return res.data;
   }
 
   async claimJob() {
+    if (!this.hasToken()) {
+      throw new Error('Worker machine token missing; claim job aborted');
+    }
     const res = await this.client.post('/workers/jobs/claim');
     return res.data;
   }

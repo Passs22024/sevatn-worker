@@ -87,7 +87,18 @@ export class HeartbeatService {
     }
   }
 
+  private onAuthRevoked?: () => void;
+
+  public setOnAuthRevoked(callback: () => void) {
+    this.onAuthRevoked = callback;
+  }
+
   public async sendImmediate() {
+    if (typeof this.apiClient.hasToken === 'function' && !this.apiClient.hasToken()) {
+      // Do not send unauthenticated heartbeat requests
+      return;
+    }
+
     try {
       const freeMem = os.freemem();
       const totalMem = os.totalmem();
@@ -139,7 +150,21 @@ export class HeartbeatService {
         }
       }
     } catch (err: any) {
-      console.warn('[Heartbeat] Ping failed:', err?.response?.data || err?.message);
+      const statusCode = err?.response?.status;
+      if (statusCode === 401 || statusCode === 403) {
+        console.warn(`[Heartbeat] ⚠️ Authentication failed (${statusCode}): Worker token is missing or has been revoked by Super Admin.`);
+        if (typeof this.apiClient.clearToken === 'function') {
+          this.apiClient.clearToken();
+        }
+        this.serverDesiredState = 'STOPPED';
+        if (this.onAuthRevoked) {
+          try {
+            this.onAuthRevoked();
+          } catch {}
+        }
+      } else {
+        console.warn('[Heartbeat] Ping failed:', err?.response?.data?.message || err?.message);
+      }
     }
   }
 }

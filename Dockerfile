@@ -10,5 +10,8 @@ RUN npm run build
 
 ENV NODE_ENV=production
 ENV HEADLESS=true
+ENV CREDENTIALS_PATH=/app/credentials/.worker-credentials.json
+
+RUN mkdir -p /app/credentials && chmod 700 /app/credentials
 
 CMD ["node", "dist/index.js"]

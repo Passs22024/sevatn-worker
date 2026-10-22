@@ -74,6 +74,13 @@ export class MachineIdentity {
       if (fs.existsSync(this.credentialsPath)) {
         const raw = fs.readFileSync(this.credentialsPath, 'utf8');
         const parsed = JSON.parse(raw);
+
+        // Safeguard: verify machineCode matches if explicitly specified in environment
+        if (parsed && parsed.machineCode && process.env.MACHINE_CODE && parsed.machineCode !== process.env.MACHINE_CODE) {
+          console.warn(`[Machine] Notice: Persisted credentials are for ${parsed.machineCode}, but current MACHINE_CODE is ${process.env.MACHINE_CODE}. Stored credentials will not be used.`);
+          return false;
+        }
+
         if (parsed && typeof parsed.machineToken === 'string' && parsed.machineToken.trim().length > 0) {
           this.machineToken = parsed.machineToken.trim();
           if (parsed.machineCode && !process.env.MACHINE_CODE) {
@@ -121,15 +128,16 @@ export class MachineIdentity {
    */
   public async promptConfirmation(
     questionFn?: (query: string) => Promise<string>,
+    options: { nonInteractive?: boolean } = {},
   ): Promise<boolean> {
-    if (this.autoConfirm) {
-      console.log('[Machine] Auto-confirm flag detected. Proceeding with pairing...');
+    if (this.autoConfirm || options.nonInteractive) {
+      console.log('[Machine] Auto-confirm / non-interactive mode detected. Proceeding with pairing...');
       return true;
     }
 
     if (!process.stdin.isTTY && !questionFn) {
-      console.log('[Machine] Non-interactive environment detected (no TTY). Skipping interactive prompt.');
-      return false;
+      console.log('[Machine] Non-interactive environment detected (no TTY). Proceeding with headless pairing...');
+      return true;
     }
 
     console.log('=======================================================');
@@ -199,6 +207,7 @@ export class MachineIdentity {
       questionFn?: (query: string) => Promise<string>;
       pollIntervalMs?: number;
       maxPollAttempts?: number;
+      nonInteractive?: boolean;
     } = {},
   ): Promise<boolean> {
     // 1. If worker already has an active machineToken, verify stability across restarts
@@ -211,11 +220,14 @@ export class MachineIdentity {
           return true;
         }
       } catch (err: any) {
-        // If 401 or revoked, machineToken is no longer valid
+        // If 401, 403 or 404, machineToken is no longer valid or machine was deleted
         const statusCode = err?.response?.status;
         if (statusCode === 401 || statusCode === 403 || statusCode === 404) {
           console.warn(`[Machine] Stale or revoked credentials detected for ${this.machineCode}. Re-pairing required.`);
           this.machineToken = null;
+          if (typeof apiClient.clearToken === 'function') {
+            apiClient.clearToken();
+          }
         } else {
           // Network issue or offline backend: assume valid token and let heartbeat retry
           console.warn(`[Machine] Backend unreachable during startup status check. Proceeding with stored token...`);
@@ -224,8 +236,8 @@ export class MachineIdentity {
       }
     }
 
-    // 2. Ask Yes/No confirmation question before generating new credentials
-    const confirmed = await this.promptConfirmation(options.questionFn);
+    // 2. Ask Yes/No confirmation question before generating new credentials (bypassed in non-interactive/Docker mode)
+    const confirmed = await this.promptConfirmation(options.questionFn, { nonInteractive: options.nonInteractive });
     if (!confirmed) {
       console.log('Pairing cancelled by user. Exiting safely.');
       return false;
@@ -245,7 +257,7 @@ export class MachineIdentity {
       console.log(`Expires In   : 15 minutes`);
       console.log('───────────────────────────────────────────────────────');
       console.log('👉 Next Steps in Admin Dashboard:');
-      console.log('1. Open: http://localhost:3000/admin/fleet');
+      console.log('1. Open: /admin/fleet');
       console.log('2. Click: "Add / Pair Worker Machine"');
       console.log(`3. Enter Machine Code: ${reg.machineCode}`);
       console.log(`4. Enter Pairing Key: ${reg.pairingCode}`);
@@ -255,7 +267,7 @@ export class MachineIdentity {
       // 4. Poll until administrator completes registration and authorizes pairing
       console.log('[Machine] Waiting for Admin registration approval on /admin/fleet...');
       const pollInterval = options.pollIntervalMs || 3000;
-      const maxAttempts = options.maxPollAttempts || 60;
+      const maxAttempts = options.maxPollAttempts || 300; // 15-minute pairing window
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, pollInterval));
@@ -263,7 +275,7 @@ export class MachineIdentity {
           const status = await apiClient.checkPairingStatus(this.machineCode);
           if (status.paired && status.machineToken) {
             this.saveCredentials(status.machineToken);
-            apiClient.setToken(this.machineToken!);
+            apiClient.setToken(status.machineToken);
             console.log('✅ Machine registration approved! Secure worker token provisioned.');
             console.log('⚡ Establishing authenticated connection to TicketAssist Cloud...');
             return true;

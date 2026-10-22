@@ -6,15 +6,22 @@ services:
     container_name: ticketassist_worker
     environment:
       - API_BASE_URL=${API_BASE_URL:?API_BASE_URL is required}
-      - MACHINE_CODE=${MACHINE_CODE:-PC-DEV-001}
-      - MACHINE_NAME=${MACHINE_NAME:-Local Dev Worker}
+      - MACHINE_CODE=${MACHINE_CODE:-PC-AWS-001}
+      - MACHINE_NAME=${MACHINE_NAME:-AWS Demo Worker}
       - MACHINE_TOKEN=${MACHINE_TOKEN:-}
+      - CREDENTIALS_PATH=/app/credentials/.worker-credentials.json
       - VERSION=${VERSION:-1.0.0}
       - HEADLESS=${HEADLESS:-true}
       - CHECK_INTERVAL_MS=${CHECK_INTERVAL_MS:-15000}
       - HEARTBEAT_INTERVAL_MS=${HEARTBEAT_INTERVAL_MS:-10000}
-      - MAX_ACTIVE_BOOKINGS=${MAX_ACTIVE_BOOKINGS:-3}
+      - MAX_ACTIVE_BOOKINGS=${MAX_ACTIVE_BOOKINGS:-0}
       - MAX_AVAILABILITY_MONITORS=${MAX_AVAILABILITY_MONITORS:-2}
       - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:?CREDENTIAL_ENCRYPTION_KEY is required}
+    volumes:
+      - worker_credentials:/app/credentials
     restart: unless-stopped
+
+volumes:
+  worker_credentials:
+    name: ticketassist_worker_credentials
 

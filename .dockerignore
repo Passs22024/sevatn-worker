@@ -8,6 +8,11 @@ dist
 .env
 .env.*
 !.env.example
+.worker-credentials.json
+credentials
+credentials/
+*.pem
+*.key
 
 # Ignore debug screenshots and failure captures
 debug

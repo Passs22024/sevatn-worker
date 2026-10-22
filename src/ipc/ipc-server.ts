@@ -411,7 +411,9 @@ export class IpcServer {
           this.config.machine.saveCredentials(resCheck.machineToken);
           this.config.apiClient.setToken(resCheck.machineToken);
           if (this.config.heartbeat) {
-            this.config.heartbeat.setExecutionPermitted(true);
+            if (resCheck.desiredState) {
+              this.config.heartbeat.setExecutionPermitted(resCheck.desiredState === 'RUNNING');
+            }
             this.config.heartbeat.sendImmediate().catch(() => {});
           }
         }

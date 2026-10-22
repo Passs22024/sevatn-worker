@@ -71,30 +71,19 @@ async function bootstrap() {
     } catch (err: any) {
       const status = err?.response?.status;
       if (status === 401 || status === 403 || status === 404) {
-        SanitizedLogger.warn(`[Machine] Worker token revoked or unauthenticated for ${machine.machineCode}. Re-pairing required.`);
+        SanitizedLogger.warn(`[Machine] Worker token revoked or machine deleted for ${machine.machineCode}. Re-pairing required.`);
         isPaired = false;
         machine.machineToken = null;
+        apiClient.clearToken();
       } else {
         SanitizedLogger.warn(`[Machine] Backend unreachable during startup status check. Proceeding in offline retry mode...`);
       }
     }
   }
 
-  // If un-paired: handle interactive vs service/standby mode
+  // If un-paired: handle interactive vs headless/Docker registration and pairing
   if (!isPaired) {
-    if (!isInteractive) {
-      SanitizedLogger.warn('=======================================================');
-      SanitizedLogger.warn('⚠️ SEVATN WORKER IS NOT YET PAIRED WITH BACKEND');
-      SanitizedLogger.warn(`Machine Code : ${machine.machineCode}`);
-      SanitizedLogger.warn(`Display Name : ${machine.machineName}`);
-      SanitizedLogger.warn(`Backend URL  : ${backendUrl}`);
-      SanitizedLogger.warn('-------------------------------------------------------');
-      SanitizedLogger.warn('Worker entering standby state. Awaiting pairing from:');
-      SanitizedLogger.warn('  1. SEVATN Worker Control Center');
-      SanitizedLogger.warn('  2. First-Run Setup & Pairing Wizard (sevatn-setup.bat)');
-      SanitizedLogger.warn('=======================================================');
-      heartbeat.setStatus('OFFLINE');
-    } else {
+    if (isInteractive) {
       console.log('\n[Worker] Unconfigured machine detected. Initiating interactive pairing sequence...');
       const pairedOk = await machine.ensurePaired(apiClient);
       if (!pairedOk) {
@@ -104,10 +93,41 @@ async function bootstrap() {
       } else {
         isPaired = true;
       }
+    } else {
+      SanitizedLogger.info('=======================================================');
+      SanitizedLogger.info('⚡ SEVATN WORKER RUNNING IN HEADLESS / DOCKER MODE');
+      SanitizedLogger.info(`Machine Code : ${machine.machineCode}`);
+      SanitizedLogger.info(`Display Name : ${machine.machineName}`);
+      SanitizedLogger.info(`Backend URL  : ${backendUrl}`);
+      SanitizedLogger.info('Initiating automated registration and pairing polling...');
+      SanitizedLogger.info('=======================================================');
+
+      while (!isPaired) {
+        const pairedOk = await machine.ensurePaired(apiClient, {
+          nonInteractive: true,
+          pollIntervalMs: 3000,
+          maxPollAttempts: 300, // 15-minute pairing window
+        });
+
+        if (pairedOk) {
+          isPaired = true;
+          break;
+        }
+
+        SanitizedLogger.warn('[Worker] Pairing window expired without approval. Regenerating pairing credentials in 5s...');
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
     }
   }
 
-  // 4. Start Heartbeat Service
+  // If still un-paired (e.g. operator cancelled prompt), do not start heartbeat or orchestrator
+  if (!isPaired) {
+    SanitizedLogger.warn('[Worker] Worker machine is not paired. Heartbeat and job execution will not start.');
+    heartbeat.setStatus('OFFLINE');
+    return;
+  }
+
+  // 4. Start Heartbeat Service (only once authenticated)
   await heartbeat.init().catch(() => {});
   heartbeat.start(heartbeatInterval);
   SanitizedLogger.info(`💓 Heartbeat service active (Interval: ${heartbeatInterval / 1000}s)`);
@@ -115,6 +135,16 @@ async function bootstrap() {
   // 5. Start Orchestrator Loop
   const checkInterval = parseInt(process.env.CHECK_INTERVAL_MS || '15000', 10);
   const orchestrator = new WorkerOrchestrator(apiClient, heartbeat, checkInterval);
+
+  // Hook token revocation handler
+  heartbeat.setOnAuthRevoked(() => {
+    SanitizedLogger.warn('[Worker] Worker authentication was revoked by server. Stopping orchestrator...');
+    orchestrator.stop();
+    heartbeat.stop();
+    apiClient.clearToken();
+    machine.machineToken = null;
+    process.exit(1); // Exit with error so container supervisor recreates/re-runs fresh pairing
+  });
 
   // 6. Graceful Shutdown with Idempotent Cleanup
   let isShuttingDown = false;
