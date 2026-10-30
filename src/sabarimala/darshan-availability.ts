@@ -1,5 +1,6 @@
 import { Page } from 'playwright';
 import { SABARIMALA_SELECTORS } from './selectors';
+import { resolveCanonicalRoute, OFFICIAL_PORTAL_ROUTES } from './flows/date-route.flow';
 import { SanitizedLogger } from '../monitoring/logger';
 import { normalizeDate } from './virtual-q';
 
@@ -253,25 +254,50 @@ export class SabarimalaDarshanAvailabilityFlow {
    * 5. Selects Route
    */
   static async selectRoute(page: Page, preferredRoute?: string): Promise<{ success: boolean; selectedRoute: string }> {
+    const canonicalRoute = preferredRoute ? resolveCanonicalRoute(preferredRoute) : OFFICIAL_PORTAL_ROUTES.PAMBA;
+    const targetRouteName = canonicalRoute ? canonicalRoute.canonicalName : (preferredRoute || 'Pamba - Marakkoottam - 4 Kms');
+
     const selectEl = page.locator('select').first();
     if (await selectEl.count() === 0) {
-      return { success: true, selectedRoute: preferredRoute || 'Pamba' };
+      return { success: true, selectedRoute: targetRouteName };
     }
 
     const options = await selectEl.locator('option').allTextContents().catch(() => []);
-    let targetIndex = 1; // Default to first actual route option (after "Select Route")
+    let targetIndex = -1;
 
-    if (preferredRoute) {
-      const matchIdx = options.findIndex(o => o.toLowerCase().includes(preferredRoute.toLowerCase().split(' ')[0]));
-      if (matchIdx > 0) {
-        targetIndex = matchIdx;
+    if (canonicalRoute) {
+      const normCanonical = canonicalRoute.canonicalName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      for (let i = 0; i < options.length; i++) {
+        const optText = options[i].trim();
+        if (optText.toLowerCase().includes('select route')) continue;
+        const optNorm = optText.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (optNorm.includes(normCanonical) || normCanonical.includes(optNorm) ||
+            canonicalRoute.aliases.some(a => optNorm.includes(a.toLowerCase().replace(/[^a-z0-9]/g, '')))) {
+          targetIndex = i;
+          break;
+        }
       }
+    }
+
+    if (targetIndex <= 0) {
+      // If canonical matching failed, try matching with preferredRoute keyword
+      if (preferredRoute) {
+        const keyword = preferredRoute.split(' ')[0].toLowerCase();
+        const matchIdx = options.findIndex((o, idx) => idx > 0 && o.toLowerCase().includes(keyword));
+        if (matchIdx > 0) {
+          targetIndex = matchIdx;
+        }
+      }
+    }
+
+    if (targetIndex <= 0) {
+      throw new Error(`Route "${preferredRoute || targetRouteName}" not available in portal options: [${options.map(o => `"${o.trim()}"`).join(', ')}]`);
     }
 
     await selectEl.selectOption({ index: targetIndex });
     await page.waitForTimeout(1500);
 
-    const selectedText = options[targetIndex]?.trim() || preferredRoute || 'Pamba';
+    const selectedText = options[targetIndex]?.trim() || targetRouteName;
     SanitizedLogger.info(`[AVAILABILITY] Route selected: ${selectedText}`);
     return { success: true, selectedRoute: selectedText };
   }
@@ -353,20 +379,25 @@ export class SabarimalaDarshanAvailabilityFlow {
   }
 
   /**
-   * 8. Clicks Login button to redirect to official login page
+   * 8. Navigates to official login page (using login button if present, or direct navigation)
    */
   static async proceedToLogin(page: Page): Promise<{ success: boolean }> {
-    SanitizedLogger.info('[DISCOVERY] Redirecting to login');
+    SanitizedLogger.info('[DISCOVERY] Navigating to official login page');
 
-    const loginBtn = page.locator('button.btn-addto:has-text("Login"), button:has-text("Login")').first();
-    if (await loginBtn.count() === 0) {
-      throw new Error('Login button not found on darshanAvailability page');
+    try {
+      const loginBtn = page.locator('button.btn-addto:has-text("Login"), button:has-text("Login"), a:has-text("Login"), button:has-text("Log In"), a:has-text("Log In")').first();
+      if (await loginBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await loginBtn.click();
+        await page.waitForURL(/login/i, { timeout: 10000 }).catch(() => {});
+      }
+    } catch {}
+
+    if (!page.url().includes('/login')) {
+      await page.goto(SABARIMALA_SELECTORS.urls.login, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
     }
-
-    await loginBtn.click();
-    await page.waitForURL(/login/i, { timeout: 15000 }).catch(async () => {
-      await page.waitForTimeout(3000);
-    });
 
     return { success: true };
   }

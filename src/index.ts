@@ -37,7 +37,7 @@ async function bootstrap() {
   console.log(`Logs: ${SanitizedLogger.getLogsDir()}`);
   console.log('=======================================================');
 
-  const backendUrl = (process.env.API_BASE_URL || 'http://localhost:4000').replace(/\/+$/, '');
+  const backendUrl = (process.env.API_BASE_URL || 'http://localhost:5000').replace(/\/+$/, '');
   const apiClient = new ApiClient(backendUrl);
   const machine = new MachineIdentity();
 

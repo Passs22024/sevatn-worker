@@ -7,6 +7,7 @@ import {
   DiscoveredSlot,
 } from './darshan-availability';
 import { SabarimalaPostLoginFlow } from './post-login-flow';
+import { WishlistFlow, PaymentReviewFlow, BookingConfirmationFlow } from './flows';
 import { SABARIMALA_SELECTORS } from './selectors';
 import { SanitizedLogger } from '../monitoring/logger';
 import { normalizeDate } from './virtual-q';
@@ -84,6 +85,31 @@ export class PlaywrightSabarimalaAdapter {
     return await SabarimalaPostLoginFlow.handlePostLoginPopup(this.page);
   }
 
+  async navigateToHomeAndDarshan(ctx?: any): Promise<boolean> {
+    if (!this.page) throw new Error('Browser not initialized');
+    return await SabarimalaPostLoginFlow.navigateToHomeAndDarshan(this.page, ctx);
+  }
+
+  async selectAuthenticatedDateAndRoute(ctx: any): Promise<boolean> {
+    if (!this.page) throw new Error('Browser not initialized');
+    return await SabarimalaPostLoginFlow.selectAuthenticatedDateAndRoute(this.page, ctx);
+  }
+
+  async ensureBookingPageReady(ctx: any): Promise<boolean> {
+    if (!this.page) throw new Error('Browser not initialized');
+    return await SabarimalaPostLoginFlow.ensureBookingPageReady(this.page, ctx);
+  }
+
+  async selectPostLoginTimeSlot(ctx: any): Promise<{ success: boolean; selectedSlot: string }> {
+    if (!this.page) throw new Error('Browser not initialized');
+    return await SabarimalaPostLoginFlow.selectPostLoginTimeSlot(this.page, ctx);
+  }
+
+  async selectBookingType(ctx: any): Promise<{ success: boolean; selectedType: string }> {
+    if (!this.page) throw new Error('Browser not initialized');
+    return await SabarimalaPostLoginFlow.selectBookingType(this.page, ctx);
+  }
+
   verifyDateTimePreserved(ctx: any): boolean {
     return SabarimalaPostLoginFlow.verifyDateTimePreserved(ctx);
   }
@@ -93,19 +119,35 @@ export class PlaywrightSabarimalaAdapter {
     return await SabarimalaPostLoginFlow.selectRegisteredPilgrims(this.page, ctx);
   }
 
+  async populateNomineeDetails(ctx: any): Promise<boolean> {
+    if (!this.page) throw new Error('Browser not initialized');
+    return await SabarimalaPostLoginFlow.populateNomineeDetails(this.page, ctx);
+  }
+
+  async handlePrasadamDetails(ctx: any): Promise<boolean> {
+    if (!this.page) throw new Error('Browser not initialized');
+    return await SabarimalaPostLoginFlow.handlePrasadamDetails(this.page, ctx);
+  }
+
   async selectReliefFundNo(ctx: any): Promise<boolean> {
     if (!this.page) throw new Error('Browser not initialized');
     return await SabarimalaPostLoginFlow.selectReliefFundNo(this.page, ctx);
   }
 
+  async checkWishlistForItem(ctx: any): Promise<boolean> {
+    if (!this.page) throw new Error('Browser not initialized');
+    return await SabarimalaPostLoginFlow.checkWishlistForItem(this.page, ctx);
+  }
+
   async addToWishlistAndVerify(ctx: any): Promise<boolean> {
     if (!this.page) throw new Error('Browser not initialized');
-    return await SabarimalaPostLoginFlow.addToWishlistAndVerify(this.page, ctx);
+    return await WishlistFlow.execute(this.page, ctx);
   }
 
   async proceedToPaymentGateway(ctx: any): Promise<boolean> {
     if (!this.page) throw new Error('Browser not initialized');
-    return await SabarimalaPostLoginFlow.proceedToPaymentGateway(this.page, ctx);
+    const result = await PaymentReviewFlow.execute(this.page, ctx);
+    return result.loaded && result.checkoutVerified;
   }
 
   async verifyPaymentSummary(ctx: any): Promise<boolean> {
@@ -115,7 +157,20 @@ export class PlaywrightSabarimalaAdapter {
 
   async executePaymentProceedAndConfirm(
     ctx: any,
-  ): Promise<{ confirmed: boolean; officialReference?: string; confirmationData?: any; message?: string }> {
+  ): Promise<{
+    confirmed: boolean;
+    isZeroCost?: boolean;
+    officialReference?: string;
+    officialBookingReference?: string;
+    cartId?: string;
+    portalTransactionReference?: string;
+    officialReceiptReference?: string;
+    confirmationEvidence?: Record<string, any>;
+    confirmedAt?: string;
+    confirmationData?: any;
+    reconciliationRequired?: boolean;
+    message?: string;
+  }> {
     if (!this.page) throw new Error('Browser not initialized');
     return await SabarimalaPostLoginFlow.executePaymentProceedAndConfirm(this.page, ctx);
   }

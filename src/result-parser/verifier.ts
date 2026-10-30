@@ -34,10 +34,11 @@ export class ResultVerifier {
 
         if (successHeader > 0) {
           const text = (await refElement.textContent()) || candidateReference || '';
-          const match = text.match(/SAB-[A-Z0-9-]+/i);
+          const match = text.match(/\b(IVQ[0-9A-Z]{6,25})\b/i) || text.match(/\b(VQ[0-9A-Z]{6,25})\b/i) || text.match(/SAB-[A-Z0-9-]+/i);
           const verifiedRef = match ? match[0] : candidateReference;
 
-          if (verifiedRef) {
+          // Reject numeric Cart IDs from being certified as authoritative official pass reference
+          if (verifiedRef && !/^\d{8,12}$/.test(verifiedRef)) {
             return {
               verified: true,
               status: 'SUCCESS',
@@ -51,8 +52,17 @@ export class ResultVerifier {
       }
     }
 
-    // If candidateReference matches required format
-    if (candidateReference && candidateReference.startsWith('SAB-')) {
+    // Reject numeric Cart IDs as booking references
+    if (candidateReference && /^\d{8,12}$/.test(candidateReference)) {
+      return {
+        verified: false,
+        status: 'UNKNOWN',
+        reason: `Candidate reference "${candidateReference}" appears to be a Cart ID, not an authoritative booking pass reference (IVQ...).`,
+      };
+    }
+
+    // Authoritative official portal format (e.g. IVQ... or VQ...)
+    if (candidateReference && (/^IVQ[0-9A-Z]{6,25}$/i.test(candidateReference) || /^VQ[0-9A-Z]{6,25}$/i.test(candidateReference) || candidateReference.startsWith('SAB-'))) {
       return {
         verified: true,
         status: 'SUCCESS',

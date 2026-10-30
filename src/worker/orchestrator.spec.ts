@@ -17,6 +17,7 @@ describe('WorkerOrchestrator Cloud & Local Concurrency Suite', () => {
 
     mockHeartbeat = {
       isExecutionPermitted: jest.fn().mockReturnValue(true),
+      isDiscoveryPermitted: jest.fn().mockReturnValue(true),
       getDesiredState: jest.fn().mockReturnValue('RUNNING'),
       setExecutionPermitted: jest.fn(),
       setStatus: jest.fn(),
@@ -56,6 +57,7 @@ describe('WorkerOrchestrator Cloud & Local Concurrency Suite', () => {
   it('suspends claim polling when Super Admin sets desiredState to STOPPED', async () => {
     process.env.MAX_ACTIVE_BOOKINGS = '1';
     mockHeartbeat.isExecutionPermitted.mockReturnValue(false);
+    mockHeartbeat.isDiscoveryPermitted.mockReturnValue(false);
     mockHeartbeat.getDesiredState.mockReturnValue('STOPPED');
 
     const orchestrator = new WorkerOrchestrator(mockApiClient, mockHeartbeat, 20, 20);
@@ -66,5 +68,23 @@ describe('WorkerOrchestrator Cloud & Local Concurrency Suite', () => {
 
     expect(mockApiClient.claimJob).not.toHaveBeenCalled();
     expect(mockApiClient.getDemandDates).not.toHaveBeenCalled();
+  });
+
+  it('permits discovery while suppressing execution when desiredState is MONITOR_ONLY', async () => {
+    process.env.MAX_ACTIVE_BOOKINGS = '1';
+    mockHeartbeat.isExecutionPermitted.mockReturnValue(false);
+    mockHeartbeat.isDiscoveryPermitted.mockReturnValue(true);
+    mockHeartbeat.getDesiredState.mockReturnValue('MONITOR_ONLY');
+
+    const orchestrator = new WorkerOrchestrator(mockApiClient, mockHeartbeat, 20, 20);
+    await orchestrator.start();
+
+    await new Promise((r) => setTimeout(r, 60));
+    orchestrator.stop();
+
+    // Execution should NOT poll
+    expect(mockApiClient.claimJob).not.toHaveBeenCalled();
+    // Discovery SHOULD run
+    expect(mockApiClient.getDemandDates).toHaveBeenCalled();
   });
 });

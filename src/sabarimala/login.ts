@@ -24,8 +24,10 @@ export class SabarimalaLoginFlow {
         });
       }
 
-      // Wait a short bit for Angular / SPA hydration
-      await page.waitForTimeout(1500);
+      // 2. Wait for login page and form to become ready (do not rely only on fixed sleep)
+      const formReadySelector = 'input[placeholder*="Mobile"], input[placeholder*="Email"], input[name="username"], input[name="mobileNumber"], input[formcontrolname="username"], input[formcontrolname="mobileNumber"], input[type="password"]';
+      await page.waitForSelector(formReadySelector, { state: 'visible', timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(500);
 
       // 2. Locate and fill username
       let usernameFilled = false;

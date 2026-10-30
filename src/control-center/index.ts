@@ -135,7 +135,7 @@ export class ControlCenterApp {
             machineCode: this.identity.machineCode,
             machineName: this.identity.machineName,
             version: this.identity.version,
-            backendUrl: process.env.API_BASE_URL || 'http://localhost:4000',
+            backendUrl: process.env.API_BASE_URL || 'http://localhost:5000',
             paired: !!this.identity.machineToken,
             hasToken: !!this.identity.machineToken,
             desiredState: 'STOPPED',
@@ -229,7 +229,7 @@ export class ControlCenterApp {
     // 4. Test Backend Connectivity
     if (url.pathname === '/api/test-backend' && req.method === 'POST') {
       const body = await this.readJsonBody(req);
-      const testUrl = (body.backendUrl || process.env.API_BASE_URL || 'http://localhost:4000').trim().replace(/\/+$/, '');
+      const testUrl = (body.backendUrl || process.env.API_BASE_URL || 'http://localhost:5000').trim().replace(/\/+$/, '');
 
       try {
         const parsed = new URL(testUrl);
@@ -294,7 +294,7 @@ export class ControlCenterApp {
     // 6. Initiate Pairing
     if (url.pathname === '/api/initiate-pairing' && req.method === 'POST') {
       try {
-        const backendUrl = process.env.API_BASE_URL || 'http://localhost:4000';
+        const backendUrl = process.env.API_BASE_URL || 'http://localhost:5000';
         const client = new ApiClient(backendUrl);
         const reg = await client.registerMachine(
           this.identity.machineCode,
@@ -325,7 +325,7 @@ export class ControlCenterApp {
     // 7. Poll Pairing Status
     if (url.pathname === '/api/poll-pairing' && req.method === 'GET') {
       try {
-        const backendUrl = process.env.API_BASE_URL || 'http://localhost:4000';
+        const backendUrl = process.env.API_BASE_URL || 'http://localhost:5000';
         const client = new ApiClient(backendUrl);
         const resCheck = await client.checkPairingStatus(this.identity.machineCode);
 

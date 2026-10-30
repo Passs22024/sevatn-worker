@@ -6,7 +6,7 @@ export class ApiClient {
   private client: AxiosInstance;
   private token: string | null = null;
 
-  constructor(baseURL: string = process.env.API_BASE_URL || 'http://localhost:4000') {
+  constructor(baseURL: string = process.env.API_BASE_URL || 'http://localhost:5000') {
     this.token = process.env.MACHINE_TOKEN || null;
     this.client = axios.create({
       baseURL,
@@ -87,18 +87,54 @@ export class ApiClient {
     return res.data;
   }
 
-  async updateJobProgress(jobId: string, data: { status: string; note?: string; logs?: any }) {
-    const res = await this.client.post(`/workers/jobs/${jobId}/progress`, data);
+  async updateJobProgress(jobId: string, data: {
+    status: string;
+    note?: string;
+    logs?: any;
+    leaseGeneration?: number;
+    fencingToken?: string;
+    protocolVersion?: string;
+  }) {
+    const res = await this.client.post(`/workers/jobs/${jobId}/progress`, {
+      ...data,
+      protocolVersion: data.protocolVersion || 'v2.0-fenced',
+    });
     return res.data;
   }
 
-  async completeJob(jobId: string, data: { officialReference?: string; confirmationData?: any; note?: string }) {
-    const res = await this.client.post(`/workers/jobs/${jobId}/complete`, data);
+  async completeJob(jobId: string, data: {
+    officialReference?: string;
+    cartId?: string;
+    officialBookingReference?: string;
+    officialReceiptReference?: string;
+    portalTransactionReference?: string;
+    confirmationEvidence?: any;
+    confirmedAt?: string | Date;
+    confirmationData?: any;
+    note?: string;
+    leaseGeneration?: number;
+    fencingToken?: string;
+    protocolVersion?: string;
+  }) {
+    const res = await this.client.post(`/workers/jobs/${jobId}/complete`, {
+      ...data,
+      protocolVersion: data.protocolVersion || 'v2.0-fenced',
+    });
     return res.data;
   }
 
-  async failJob(jobId: string, data: { status: string; errorCode?: string; errorMessage?: string }) {
-    const res = await this.client.post(`/workers/jobs/${jobId}/fail`, data);
+  async failJob(jobId: string, data: {
+    status: string;
+    errorCode?: string;
+    errorMessage?: string;
+    leaseGeneration?: number;
+    fencingToken?: string;
+    protocolVersion?: string;
+  }) {
+    const res = await this.client.post(`/workers/jobs/${jobId}/fail`, {
+      ...data,
+      protocolVersion: data.protocolVersion || 'v2.0-fenced',
+    });
     return res.data;
   }
 
@@ -112,8 +148,14 @@ export class ApiClient {
     note?: string;
     requiresHumanNote?: string;
     executionLogs?: any;
+    leaseGeneration?: number;
+    fencingToken?: string;
+    protocolVersion?: string;
   }) {
-    const res = await this.client.post(`/workers/jobs/${bookingId}/status`, data);
+    const res = await this.client.post(`/workers/jobs/${bookingId}/status`, {
+      ...data,
+      protocolVersion: data.protocolVersion || 'v2.0-fenced',
+    });
     return res.data;
   }
 
@@ -124,20 +166,63 @@ export class ApiClient {
     failureReason?: string;
     executionLogs?: any;
     screenshotUrl?: string;
+    leaseGeneration?: number;
+    fencingToken?: string;
+    protocolVersion?: string;
   }) {
-    const res = await this.client.post(`/workers/jobs/${bookingId}/result`, data);
+    const res = await this.client.post(`/workers/jobs/${bookingId}/result`, {
+      ...data,
+      protocolVersion: data.protocolVersion || 'v2.0-fenced',
+    });
     return res.data;
   }
 
-  async getDemandDates() {
+  async getDemandDates(): Promise<Array<{
+    demandKey?: string;
+    date: string;
+    route: string;
+    pendingCount: number;
+    isDue?: boolean;
+    status?: string;
+    lastCheckedAt?: string | null;
+    nextCheckAt?: string | null;
+    lockedBy?: string | null;
+  }>> {
     const res = await this.client.get('/availability/demand-dates');
+    return res.data;
+  }
+
+  async claimDemand(demandKey: string, workerId: string): Promise<{ claimed: boolean; message?: string }> {
+    const res = await this.client.post('/availability/claim-demand', { demandKey, workerId });
+    return res.data;
+  }
+
+  async releaseDemand(
+    demandKey: string,
+    workerId: string,
+    status: 'AVAILABLE' | 'UNAVAILABLE' | 'ERROR',
+    durationMs?: number,
+    errorMessage?: string,
+  ): Promise<any> {
+    const res = await this.client.post('/availability/release-demand', {
+      demandKey,
+      workerId,
+      status,
+      durationMs,
+      errorMessage,
+    });
+    return res.data;
+  }
+
+  async getDiscoveryMetrics(): Promise<any> {
+    const res = await this.client.get('/availability/metrics');
     return res.data;
   }
 
   async publishAvailability(data: {
     date: string;
     route: string;
-    timeSlot: string;
+    timeSlot?: string;
     source?: string;
   }) {
     const res = await this.client.post('/availability/events', data);
@@ -147,7 +232,7 @@ export class ApiClient {
   async publishBulkAvailability(opportunities: Array<{
     date: string;
     route: string;
-    timeSlot: string;
+    timeSlot?: string;
     source?: string;
   }>) {
     const res = await this.client.post('/availability/events/bulk', { opportunities });

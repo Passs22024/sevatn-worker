@@ -2,6 +2,7 @@ import { ApiClient } from '../api/client';
 import { PlaywrightSabarimalaAdapter } from '../sabarimala/sabarimala-adapter';
 import { SanitizedLogger } from '../monitoring/logger';
 import { normalizeDate } from '../sabarimala/virtual-q';
+import { normalizeDemandKey } from './demand-key';
 
 export class AvailabilityDiscoveryWorker {
   private isChecking = false;
@@ -9,97 +10,161 @@ export class AvailabilityDiscoveryWorker {
   constructor(private apiClient: ApiClient) {}
 
   /**
-   * Executes a single non-blocking discovery pass across all active demand dates.
+   * Executes an intelligent, distributed-throttled discovery pass across active demand dates.
    * Entry Point: https://sabarimalaonline.org/#/darshanAvailability (Public pre-login page)
-   * Discovers available dates and real time slots, publishes internal availability events,
-   * and immediately releases the browser context.
+   * 
+   * Features:
+   * - Demand-based: only inspects dates with active pending customer demand.
+   * - Distributed deduplication: acquires an atomic lock per demand key.
+   * - Interval throttling: skips browser launches when demands are within backoff/refresh windows.
+   * - Browser lifecycle optimization: zero browser launches when no demands are due.
+   * - Structured logging: [DISCOVERY] tags with demandKey, lastCheckedAt, nextCheckAt.
    */
-  async runDiscoveryPass(): Promise<void> {
+  async runDiscoveryPass(workerId: string = 'worker-node'): Promise<void> {
     if (this.isChecking) {
       return;
     }
 
     this.isChecking = true;
-    const adapter = new PlaywrightSabarimalaAdapter();
 
     try {
-      // 1. Query active demand groups from API (Date Demand Index)
+      // 1. Fetch active demand dates with schedule state from API
       const demandGroups = await this.apiClient.getDemandDates();
       if (!demandGroups || demandGroups.length === 0) {
-        SanitizedLogger.info('[PENDING-MONITOR] No pending bookings. Monitor idle.');
+        SanitizedLogger.info('[DISCOVERY] No pending bookings. Monitor idle.');
         return;
       }
 
-      const demandDates = Array.from(new Set(demandGroups.map((g: any) => normalizeDate(g.date))));
-      SanitizedLogger.info(`[PENDING-MONITOR] Active demand dates to inspect: ${demandDates.join(', ')}`);
+      // 2. Identify due demands
+      const dueDemands = demandGroups.filter((g: any) => g.isDue !== false);
 
-      // 2. Open official Darshan Availability page in isolated browser context
-      await adapter.init();
-      const openResult = await adapter.openDarshanAvailability();
-      if (!openResult.success) {
-        SanitizedLogger.warn('[PENDING-MONITOR] Official portal darshanAvailability unreachable during discovery pass');
+      if (dueDemands.length === 0) {
+        // All active demands are within their scheduled intervals. Skip browser launch completely.
+        const nextUpcoming = demandGroups
+          .filter((g: any) => g.nextCheckAt)
+          .sort((a: any, b: any) => (a.nextCheckAt > b.nextCheckAt ? 1 : -1))[0];
+
+        SanitizedLogger.info(
+          `[DISCOVERY] No demand dates due for inspection (all within scheduled intervals). Browser launch skipped. Next due: ${nextUpcoming?.demandKey || 'none'} at ${nextUpcoming?.nextCheckAt || 'N/A'}`
+        );
         return;
       }
 
-      const discoveredOpportunities: Array<{ date: string; route: string; timeSlot: string; source: string }> = [];
+      // 3. Atomically claim due demands to prevent concurrent multi-worker scanning
+      const claimedDemands: any[] = [];
+      for (const demand of dueDemands) {
+        const demandKey = demand.demandKey || normalizeDemandKey(demand.date, demand.route);
+        let claimed = true;
 
-      // 3. Inspect each target demand date on the official calendar
-      for (const demandGroup of demandGroups) {
-        const canonicalDate = normalizeDate(demandGroup.date);
-        const targetRoute = demandGroup.route || 'Pamba (Regular Footpath Route)';
-
-        const checkResult = await adapter.checkRequestedDateAvailability(canonicalDate);
-
-        if (checkResult.available) {
+        if (typeof this.apiClient.claimDemand === 'function') {
           try {
-            // Select the date
-            await adapter.selectRequestedDate(canonicalDate);
-
-            // Select the route
-            const routeResult = await adapter.selectRoute(targetRoute);
-
-            // Discover all real available time slots
-            const slots = await adapter.discoverAvailableSlots();
-
-            if (slots.length > 0) {
-              SanitizedLogger.info(`[PENDING-MONITOR] 🟢 Date became available: ${canonicalDate}`);
-              for (const slot of slots) {
-                discoveredOpportunities.push({
-                  date: canonicalDate,
-                  route: routeResult.selectedRoute || targetRoute,
-                  timeSlot: slot.slotName,
-                  source: 'SABARIMALA_DARSHAN_AVAILABILITY',
-                });
-              }
-            } else {
-              SanitizedLogger.warn(`[PENDING-MONITOR] Date ${canonicalDate} open but no selectable time slots rendered`);
-            }
-          } catch (selErr: any) {
-            SanitizedLogger.warn(`[PENDING-MONITOR] Error selecting open date ${canonicalDate}:`, selErr.message);
+            const claimRes = await this.apiClient.claimDemand(demandKey, workerId);
+            claimed = claimRes?.claimed ?? true;
+          } catch (claimErr: any) {
+            SanitizedLogger.warn(`[DISCOVERY] demandKey=${demandKey} claim error: ${claimErr.message}. Proceeding locally.`);
+            claimed = true;
           }
+        }
+
+        if (claimed) {
+          claimedDemands.push({ ...demand, demandKey });
         } else {
-          SanitizedLogger.info(`[PENDING-MONITOR] Date ${canonicalDate} state: ${checkResult.state}`);
+          SanitizedLogger.info(
+            `[DISCOVERY] demandKey=${demandKey} lastCheckedAt=${demand.lastCheckedAt || 'NEVER'} nextCheckAt=${demand.nextCheckAt || 'N/A'} deduplication=SKIPPED`
+          );
         }
       }
 
-      if (discoveredOpportunities.length > 0) {
-        SanitizedLogger.info(`[PENDING-MONITOR] Discovered ${discoveredOpportunities.length} available opportunity slot(s)!`);
-        for (const opp of discoveredOpportunities) {
-          SanitizedLogger.info(`[PENDING-MONITOR] ${opp.date} / ${opp.route} / ${opp.timeSlot} available`);
+      if (claimedDemands.length === 0) {
+        SanitizedLogger.info('[DISCOVERY] All due demands claimed or in-flight by another worker. Browser launch skipped.');
+        return;
+      }
+
+      // 4. Open official Darshan Availability page only now that at least one demand is claimed
+      const adapter = new PlaywrightSabarimalaAdapter();
+      const passStartTime = Date.now();
+
+      try {
+        await adapter.init();
+        const openResult = await adapter.openDarshanAvailability();
+        if (!openResult.success) {
+          SanitizedLogger.warn('[DISCOVERY] Official portal darshanAvailability unreachable during discovery pass');
+          for (const d of claimedDemands) {
+            if (typeof this.apiClient.releaseDemand === 'function') {
+              await this.apiClient.releaseDemand(d.demandKey, workerId, 'ERROR', Date.now() - passStartTime, 'Page unreachable');
+            }
+          }
+          return;
         }
 
-        // 4. Publish availability events to API Smart Scheduler
-        await this.apiClient.publishBulkAvailability(discoveredOpportunities);
-      } else {
-        SanitizedLogger.info('[PENDING-MONITOR] No new availability events discovered for current active demand dates.');
+        const discoveredOpportunities: Array<{ date: string; route: string; timeSlot?: string; source: string }> = [];
+
+        // 5. Inspect each claimed target demand date on official calendar
+        for (const demand of claimedDemands) {
+          const canonicalDate = normalizeDate(demand.date);
+          const targetRoute = demand.route || 'Pamba (Regular Footpath Route)';
+          const demandKey = demand.demandKey;
+          const scanStartTime = Date.now();
+
+          const checkResult = await adapter.checkRequestedDateAvailability(canonicalDate);
+
+          if (checkResult.available) {
+            try {
+              // Select date
+              await adapter.selectRequestedDate(canonicalDate);
+
+              // Select route
+              const routeResult = await adapter.selectRoute(targetRoute);
+              const verifiedRoute = routeResult.selectedRoute || targetRoute;
+
+              SanitizedLogger.info(`[DISCOVERY] 🟢 Date and route verified available: ${canonicalDate} / ${verifiedRoute}`);
+              discoveredOpportunities.push({
+                date: canonicalDate,
+                route: verifiedRoute,
+                source: 'SABARIMALA_DARSHAN_AVAILABILITY',
+              });
+
+              if (typeof this.apiClient.releaseDemand === 'function') {
+                await this.apiClient.releaseDemand(demandKey, workerId, 'AVAILABLE', Date.now() - scanStartTime);
+              }
+            } catch (selErr: any) {
+              SanitizedLogger.warn(`[DISCOVERY] Error selecting open date ${canonicalDate}:`, selErr.message);
+              if (typeof this.apiClient.releaseDemand === 'function') {
+                await this.apiClient.releaseDemand(demandKey, workerId, 'ERROR', Date.now() - scanStartTime, selErr.message);
+              }
+            }
+          } else {
+            SanitizedLogger.info(`[DISCOVERY] demandKey=${demandKey} result=UNAVAILABLE state=${checkResult.state}`);
+            if (typeof this.apiClient.releaseDemand === 'function') {
+              await this.apiClient.releaseDemand(demandKey, workerId, 'UNAVAILABLE', Date.now() - scanStartTime);
+            }
+          }
+        }
+
+        // 6. Publish bulk discovered availability events to API Smart Matcher
+        if (discoveredOpportunities.length > 0) {
+          SanitizedLogger.info(`[DISCOVERY] Discovered ${discoveredOpportunities.length} available date/route opportunity(ies)!`);
+          for (const opp of discoveredOpportunities) {
+            SanitizedLogger.info(`[DISCOVERY] Available: ${opp.date} / ${opp.route}`);
+          }
+          await this.apiClient.publishBulkAvailability(discoveredOpportunities);
+        } else {
+          SanitizedLogger.info('[DISCOVERY] No new availability events discovered for inspected demand dates.');
+        }
+      } catch (innerErr: any) {
+        SanitizedLogger.error('[DISCOVERY] Error during portal discovery execution:', innerErr);
+        for (const d of claimedDemands) {
+          if (typeof this.apiClient.releaseDemand === 'function') {
+            await this.apiClient.releaseDemand(d.demandKey, workerId, 'ERROR', Date.now() - passStartTime, innerErr.message);
+          }
+        }
+      } finally {
+        await adapter.close().catch(() => {});
       }
     } catch (err: any) {
-      SanitizedLogger.error('[PENDING-MONITOR] Error during discovery pass:', err);
+      SanitizedLogger.error('[DISCOVERY] Error in discovery pass:', err);
     } finally {
-      // 5. Always release browser context immediately
-      await adapter.close().catch(() => {});
       this.isChecking = false;
     }
   }
 }
-

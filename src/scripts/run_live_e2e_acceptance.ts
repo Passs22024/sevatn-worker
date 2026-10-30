@@ -10,7 +10,8 @@ async function runLiveE2EAcceptance() {
   console.log('TICKETASSIST — FINAL LIVE E2E ACCEPTANCE TEST');
   console.log('====================================================');
 
-  const apiClient = new ApiClient(process.env.API_BASE_URL || 'http://localhost:4000');
+  const defaultBackend = process.env.API_BASE_URL || 'http://localhost:5000';
+  const apiClient = new ApiClient(defaultBackend);
   
   // 1. First attempt to claim an existing queued job from API
   console.log('[1/3] Checking for queued booking jobs on API...');
@@ -23,7 +24,7 @@ async function runLiveE2EAcceptance() {
     console.log('[1/3] No job in queue. Creating a new live test booking request...');
     
     // Login as Centre User to create a real booking
-    const loginRes = await axios.post('http://localhost:4000/auth/login', {
+    const loginRes = await axios.post(`${defaultBackend}/auth/login`, {
       identifier: 'muthu.esevai@gmail.com',
       password: 'Admin@123456',
     });
@@ -33,7 +34,7 @@ async function runLiveE2EAcceptance() {
 
     // Create booking for 2026-10-20
     const createRes = await axios.post(
-      'http://localhost:4000/bookings',
+      `${defaultBackend}/bookings`,
       {
         requestedDate: '2026-10-20',
         route: 'Pamba - Marakkoottam - 4 Kms',
@@ -83,7 +84,7 @@ async function runLiveE2EAcceptance() {
 
   // 3. Query final booking status from API
   try {
-    const statusRes = await axios.get(`http://localhost:4000/workers/status/PC-001`, {
+    const statusRes = await axios.get(`${defaultBackend}/workers/status/PC-001`, {
       headers: { 'x-machine-token': process.env.MACHINE_TOKEN || '' },
     }).catch(() => null);
     console.log('Worker final status:', statusRes?.data);

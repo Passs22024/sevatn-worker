@@ -29,6 +29,10 @@ export class HeartbeatService {
     return this.serverDesiredState === 'RUNNING';
   }
 
+  isDiscoveryPermitted(): boolean {
+    return this.serverDesiredState === 'RUNNING' || this.serverDesiredState === 'MONITOR_ONLY';
+  }
+
   setExecutionPermitted(permitted: boolean) {
     this.serverDesiredState = permitted ? 'RUNNING' : 'STOPPED';
   }

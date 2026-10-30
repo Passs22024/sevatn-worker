@@ -111,7 +111,7 @@ export class IpcServer {
         port: this.port,
         pid: process.pid,
         token: this.token,
-        backendUrl: process.env.API_BASE_URL || 'http://localhost:4000',
+        backendUrl: process.env.API_BASE_URL || 'http://localhost:5000',
         startedAt: new Date().toISOString(),
       };
       fs.writeFileSync(this.ipcFilePath, JSON.stringify(data, null, 2), 'utf8');
@@ -204,7 +204,7 @@ export class IpcServer {
           machineCode: this.config.machine.machineCode,
           machineName: this.config.machine.machineName,
           version: this.config.machine.version,
-          backendUrl: process.env.API_BASE_URL || 'http://localhost:4000',
+          backendUrl: process.env.API_BASE_URL || 'http://localhost:5000',
           paired: !!this.config.machine.machineToken,
           hasToken: !!this.config.machine.machineToken,
           desiredState,
@@ -309,7 +309,7 @@ export class IpcServer {
     // 5. Test Backend Connectivity
     if (url.pathname === '/api/test-backend' && req.method === 'POST') {
       const body = await this.readJsonBody(req);
-      const testUrl = (body.backendUrl || process.env.API_BASE_URL || 'http://localhost:4000').trim().replace(/\/+$/, '');
+      const testUrl = (body.backendUrl || process.env.API_BASE_URL || 'http://localhost:5000').trim().replace(/\/+$/, '');
 
       try {
         const parsed = new URL(testUrl);

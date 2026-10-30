@@ -4,6 +4,7 @@ import { VerificationWorker } from '../jobs/verification-worker';
 import { BookingWorker } from '../jobs/booking-worker';
 import { AvailabilityDiscoveryWorker } from '../availability/discovery-worker';
 import { SanitizedLogger } from '../monitoring/logger';
+import { BookingExecutionGuard } from '../security/execution-guard';
 
 export class WorkerOrchestrator {
   private isRunning = false;
@@ -14,6 +15,7 @@ export class WorkerOrchestrator {
   private maxActiveBookings: number;
   private maxAvailabilityMonitors: number;
   private activeExecutions = 0;
+  private activeJobIds = new Set<string>();
 
   constructor(
     private apiClient: ApiClient,
@@ -32,15 +34,16 @@ export class WorkerOrchestrator {
   async start() {
     this.isRunning = true;
     SanitizedLogger.info('=======================================================');
-    SanitizedLogger.info('🚀 TICKETASSIST DUAL-ENGINE WORKER ORCHESTRATOR STARTED');
-    SanitizedLogger.info(`• Execution Concurrency Limit: ${this.maxActiveBookings}`);
-    SanitizedLogger.info(`• Discovery Concurrency Limit: ${this.maxAvailabilityMonitors}`);
+    SanitizedLogger.info('🚀 TICKETASSIST THREE-ENGINE WORKER ORCHESTRATOR STARTED');
+    SanitizedLogger.info(`• Engine 1: Availability Discovery Engine (Public Pre-Login)`);
+    SanitizedLogger.info(`• Engine 2: Booking Execution Engine (Concurrency Limit: ${this.maxActiveBookings})`);
+    SanitizedLogger.info(`• Engine 3: Account Verification Engine (Independent Sandbox)`);
     SanitizedLogger.info('=======================================================');
 
-    // 1. Start Independent Availability Discovery Loop
+    // 1. Start Independent Availability Discovery Engine
     this.startDiscoveryLoop();
 
-    // 2. Start Booking Execution Queue Polling Loop
+    // 2. Start Booking Execution Engine Polling Loop
     this.startExecutionLoop();
   }
 
@@ -57,9 +60,14 @@ export class WorkerOrchestrator {
     SanitizedLogger.info('[AVAILABILITY] Availability Discovery Engine initialized.');
 
     while (this.isRunning) {
-      if (this.heartbeat.isExecutionPermitted()) {
+      const isDiscoveryPermitted = typeof this.heartbeat.isDiscoveryPermitted === 'function'
+        ? this.heartbeat.isDiscoveryPermitted()
+        : this.heartbeat.isExecutionPermitted();
+
+      if (isDiscoveryPermitted) {
         try {
-          await this.discoveryWorker.runDiscoveryPass();
+          const workerId = process.env.MACHINE_CODE || 'worker-node';
+          await this.discoveryWorker.runDiscoveryPass(workerId);
         } catch (err: any) {
           SanitizedLogger.error('[AVAILABILITY] Discovery cycle error:', err?.message || err);
         }
@@ -127,8 +135,20 @@ export class WorkerOrchestrator {
               this.heartbeat.setStatus('IDLE');
             }
           } else if (claimResult.hasJob && claimResult.job) {
+            const job = claimResult.job;
+            const bookingKey = job.bookingRequestId || job.bookingCode || job.id;
+
+            if (claimResult.jobType !== 'ACCOUNT_VERIFICATION' && (BookingExecutionGuard.isBookingActive(bookingKey) || this.activeJobIds.has(job.id))) {
+              SanitizedLogger.warn(
+                `[Worker] Deduplication: Claimed job #${job.id} for booking #${job.bookingCode || bookingKey} is already active in this worker process. Skipping duplicate dispatch.`
+              );
+              await new Promise((resolve) => setTimeout(resolve, this.checkIntervalMs));
+              continue;
+            }
+
             this.activeExecutions++;
-            this.processJobAsync(claimResult.jobType, claimResult.job);
+            this.activeJobIds.add(job.id);
+            this.processJobAsync(claimResult.jobType, job);
           } else {
             if (this.activeExecutions === 0) {
               this.heartbeat.setStatus('IDLE');
@@ -155,6 +175,32 @@ export class WorkerOrchestrator {
 
   private async processJobAsync(jobType: string, job: any) {
     this.heartbeat.addActiveJob(job.id);
+    this.activeJobIds.add(job.id);
+
+    const isBooking = jobType !== 'ACCOUNT_VERIFICATION';
+    let lockAcquired = false;
+
+    if (isBooking) {
+      const lockRes = BookingExecutionGuard.acquire({
+        bookingId: job.bookingRequestId || job.id,
+        bookingCode: job.bookingCode || job.id,
+        jobId: job.id,
+        dispatchSource: job.dispatchSource || 'QUEUE_POLL',
+        owner: 'WORKER_ORCHESTRATOR',
+      });
+
+      if (!lockRes.acquired) {
+        SanitizedLogger.warn(
+          `[Worker] Deduplication guard: Aborting duplicate dispatch for Booking #${job.bookingCode || job.id}. Lock owned by Job #${lockRes.existingLock?.jobId}.`
+        );
+        this.activeExecutions = Math.max(0, this.activeExecutions - 1);
+        this.activeJobIds.delete(job.id);
+        this.heartbeat.removeActiveJob(job.id);
+        return;
+      }
+      lockAcquired = true;
+      job.attemptId = lockRes.attemptId;
+    }
 
     // Active lease renewal heartbeat timer (every 45s)
     const leaseTimer = setInterval(async () => {
@@ -180,6 +226,10 @@ export class WorkerOrchestrator {
       SanitizedLogger.error(`[Worker] Job execution unhandled exception:`, err);
     } finally {
       clearInterval(leaseTimer);
+      if (isBooking && lockAcquired) {
+        BookingExecutionGuard.release(job.bookingRequestId || job.bookingCode || job.id, job.id);
+      }
+      this.activeJobIds.delete(job.id);
       this.activeExecutions = Math.max(0, this.activeExecutions - 1);
       this.heartbeat.removeActiveJob(job.id);
     }
