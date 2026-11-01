@@ -155,6 +155,37 @@ export class BookingWorker {
       return;
     }
 
+    // STEP 0.5: PRE-FLIGHT AVAILABILITY CHECK (Verify date & route availability before login)
+    SanitizedLogger.info(`[PRE-FLIGHT] Checking date & route availability for #${job.bookingCode}: ${canonicalDate} | ${job.route}`);
+    const preflightAdapter = new PlaywrightSabarimalaAdapter();
+    try {
+      await preflightAdapter.init();
+      const openAvail = await preflightAdapter.openDarshanAvailability();
+      if (openAvail.success) {
+        const checkResult = await preflightAdapter.checkRequestedDateAvailability(canonicalDate);
+        if (!checkResult.available) {
+          SanitizedLogger.warn(`[PRE-FLIGHT] Requested date ${canonicalDate} is UNAVAILABLE (${checkResult.state || 'FULL/DISABLED'}). Aborting login.`);
+          BookingExecutionGuard.updateLifecycleState(bookingKey, 'RETRYABLE_FAILURE');
+          await this.apiClient.failJob(job.id, {
+            status: 'DATE_UNAVAILABLE',
+            errorCode: 'DATE_UNAVAILABLE',
+            errorMessage: `Pre-flight check: Requested date ${canonicalDate} is not available on official portal (${checkResult.state || 'FULL/DISABLED'}).`,
+          });
+          if (internalLockAcquired) {
+            BookingExecutionGuard.release(bookingKey, job.id);
+          }
+          return;
+        }
+        SanitizedLogger.info(`[PRE-FLIGHT] ✅ Date ${canonicalDate} verified AVAILABLE on official portal. Proceeding to login.`);
+      } else {
+        SanitizedLogger.warn('[PRE-FLIGHT] Public darshanAvailability unreachable. Proceeding directly to authenticated flow.');
+      }
+    } catch (preflightErr: any) {
+      SanitizedLogger.warn(`[PRE-FLIGHT] Pre-flight inspection encountered error (${preflightErr.message}). Continuing to login flow.`);
+    } finally {
+      await preflightAdapter.close().catch(() => {});
+    }
+
     const adapter = new PlaywrightSabarimalaAdapter();
 
     try {
