@@ -1314,27 +1314,51 @@ export class SabarimalaPostLoginFlow {
     const portalTransactionReference = txnMatch ? txnMatch[1].trim() : (ctx.cartId || undefined);
 
     // 2. Extract Official Pass Booking Reference (e.g. IVQ...)
-    const modalBookingMatch = bodyText.match(/(?:Booking\s*(?:ID|No|Reference|Pass\s*No)|Pass\s*(?:Number|No))[\s:]+([0-9A-Z]{6,30})/i) ||
-                             bodyText.match(/\b(IVQ[0-9A-Z]{6,25})\b/i) ||
-                             bodyText.match(/\b(VQ[0-9A-Z]{6,25})\b/i);
-    const modalBookingRef = modalBookingMatch ? modalBookingMatch[1].trim() : null;
+    const ivqMatch = bodyText.match(/\b(IVQ[0-9A-Z]{6,30})\b/i);
+    const vqMatch = bodyText.match(/\b(VQ[0-9A-Z]{6,30})\b/i);
+    const txnPrefixMatch = bodyText.match(/\b(TXN[0-9A-Z]{6,30})\b/i);
 
-    // Authoritative Pass Reference: Must be a true booking reference (IVQ...), NEVER cartId or pure numeric ID
-    const authoritativeBookingRef =
-      modalBookingRef ||
-      ctx.officialBookingReference ||
-      ctx.officialBookingId ||
-      (portalTransactionReference && /^TXN[0-9A-Z]+$/i.test(portalTransactionReference) ? portalTransactionReference : null);
+    let modalBookingRef: string | null = null;
+    if (ivqMatch) {
+      modalBookingRef = ivqMatch[1].trim();
+    } else if (vqMatch) {
+      modalBookingRef = vqMatch[1].trim();
+    } else if (txnPrefixMatch) {
+      modalBookingRef = txnPrefixMatch[1].trim();
+    } else {
+      const genericMatch = bodyText.match(/(?:Booking\s*(?:ID|No|Reference|Pass\s*No)|Pass\s*(?:Number|No))[\s:]+([0-9A-Z]{6,30})/i);
+      if (genericMatch) {
+        const candidate = genericMatch[1].trim();
+        const rejectedWords = ['service', 'darshan', 'virtual', 'booking', 'status', 'success', 'pending', 'confirmed'];
+        if (!rejectedWords.includes(candidate.toLowerCase()) && !/^[A-Za-z]+$/.test(candidate)) {
+          modalBookingRef = candidate;
+        }
+      }
+    }
 
-    const isCartId = !!(
-      authoritativeBookingRef &&
-      ((ctx.cartId && authoritativeBookingRef === ctx.cartId) || /^\d{8,12}$/.test(authoritativeBookingRef))
-    );
+    // Helper: validate whether a string is a legitimate authoritative reference (must match IVQ\d+, VQ\d+, TXN\d+, or alphanumeric with digits)
+    const isLegitReference = (ref: string | null | undefined): boolean => {
+      if (!ref || typeof ref !== 'string') return false;
+      const clean = ref.trim();
+      if (clean.length < 6) return false;
+      if (clean.startsWith('SAB-2026-')) return false;
+      if ((ctx.cartId && clean === ctx.cartId) || /^\d{8,12}$/.test(clean)) return false;
+      if (!/\d/.test(clean)) return false;
+      return /^(?:IVQ|VQ|TXN|[A-Z]{2,5}\d|\d{2,5}[A-Z])[0-9A-Z]+$/i.test(clean);
+    };
 
-    // Reject synthetic references and Cart IDs as the official booking reference
-    const validOfficialReference = authoritativeBookingRef && !isCartId && !authoritativeBookingRef.startsWith('SAB-2026-') && authoritativeBookingRef.length >= 6
-      ? authoritativeBookingRef
-      : null;
+    let authoritativeBookingRef: string | null = null;
+    if (isLegitReference(modalBookingRef)) {
+      authoritativeBookingRef = modalBookingRef;
+    } else if (isLegitReference(ctx.officialBookingReference)) {
+      authoritativeBookingRef = ctx.officialBookingReference!;
+    } else if (isLegitReference(ctx.officialBookingId)) {
+      authoritativeBookingRef = ctx.officialBookingId!;
+    } else if (isLegitReference(portalTransactionReference)) {
+      authoritativeBookingRef = portalTransactionReference!;
+    }
+
+    const validOfficialReference = authoritativeBookingRef;
 
     // 3. Extract Receipt Reference if present
     const receiptMatch = bodyText.match(/(?:Receipt\s*(?:ID|No|Reference))[\s:]+([0-9A-Z]{6,30})/i);

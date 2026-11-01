@@ -270,30 +270,59 @@ export class BookingConfirmationFlow {
 
     // 2. Extract Official Pass Booking Reference (e.g. IVQ26103022183531421270)
     // Priority:
-    // A) Explicit Booking ID / Pass No / IVQ from the confirmation modal itself
+    // A) Explicit IVQ\d+ or VQ\d+ or TXN\d+ from the confirmation modal or body text
     // B) Authoritative official booking ID captured from payment summary table (#/paymentGateway)
-    const modalBookingMatch =
-      bodyText.match(/(?:Booking\s*(?:ID|No|Reference|Pass\s*No)|Pass\s*(?:Number|No))[\s:]+([0-9A-Z]{6,30})/i) ||
-      bodyText.match(/\b(IVQ[0-9A-Z]{6,25})\b/i) ||
-      bodyText.match(/\b(VQ[0-9A-Z]{6,25})\b/i);
-    const modalBookingRef = modalBookingMatch ? modalBookingMatch[1].trim() : null;
+    // C) Explicit Booking ID / Pass No labeled values, strictly rejecting non-reference labels like "Service"
+    const ivqMatch = bodyText.match(/\b(IVQ[0-9A-Z]{6,30})\b/i);
+    const vqMatch = bodyText.match(/\b(VQ[0-9A-Z]{6,30})\b/i);
+    const txnPrefixMatch = bodyText.match(/\b(TXN[0-9A-Z]{6,30})\b/i);
 
-    const authoritativeBookingRef =
-      modalBookingRef ||
-      ctx.officialBookingReference ||
-      ctx.officialBookingId ||
-      (portalTransactionReference && /^TXN[0-9A-Z]+$/i.test(portalTransactionReference) ? portalTransactionReference : null);
+    let modalBookingRef: string | null = null;
+    if (ivqMatch) {
+      modalBookingRef = ivqMatch[1].trim();
+    } else if (vqMatch) {
+      modalBookingRef = vqMatch[1].trim();
+    } else if (txnPrefixMatch) {
+      modalBookingRef = txnPrefixMatch[1].trim();
+    } else {
+      const genericMatch = bodyText.match(/(?:Booking\s*(?:ID|No|Reference|Pass\s*No)|Pass\s*(?:Number|No))[\s:]+([0-9A-Z]{6,30})/i);
+      if (genericMatch) {
+        const candidate = genericMatch[1].trim();
+        // Reject plain table headers, labels, or words like "Service", "Darshan", "Virtual"
+        const rejectedWords = ['service', 'darshan', 'virtual', 'booking', 'status', 'success', 'pending', 'confirmed'];
+        if (!rejectedWords.includes(candidate.toLowerCase()) && !/^[A-Za-z]+$/.test(candidate)) {
+          modalBookingRef = candidate;
+        }
+      }
+    }
 
-    const isCartId = !!(
-      authoritativeBookingRef &&
-      ((ctx.cartId && authoritativeBookingRef === ctx.cartId) || /^\d{8,12}$/.test(authoritativeBookingRef))
-    );
+    // Helper: validate whether a string is a legitimate authoritative reference (must match IVQ\d+, VQ\d+, TXN\d+, or alphanumeric with digits)
+    const isLegitReference = (ref: string | null | undefined): boolean => {
+      if (!ref || typeof ref !== 'string') return false;
+      const clean = ref.trim();
+      if (clean.length < 6) return false;
+      if (clean.startsWith('SAB-2026-')) return false;
+      // Reject pure numeric Cart IDs (8 to 12 digits)
+      if ((ctx.cartId && clean === ctx.cartId) || /^\d{8,12}$/.test(clean)) return false;
+      // Reject plain words with no digits like "Service", "Darshan"
+      if (!/\d/.test(clean)) return false;
+      // Must match IVQ, VQ, TXN, or standard alphanumeric reference with digits
+      return /^(?:IVQ|VQ|TXN|[A-Z]{2,5}\d|\d{2,5}[A-Z])[0-9A-Z]+$/i.test(clean);
+    };
 
-    // Strict validation: Authoritative booking reference must NOT be a Cart ID or synthetic reference
-    const validOfficialReference =
-      authoritativeBookingRef && !isCartId && !authoritativeBookingRef.startsWith('SAB-2026-') && authoritativeBookingRef.length >= 6
-        ? authoritativeBookingRef
-        : null;
+    let authoritativeBookingRef: string | null = null;
+    if (isLegitReference(modalBookingRef)) {
+      authoritativeBookingRef = modalBookingRef;
+    } else if (isLegitReference(ctx.officialBookingReference)) {
+      authoritativeBookingRef = ctx.officialBookingReference!;
+    } else if (isLegitReference(ctx.officialBookingId)) {
+      authoritativeBookingRef = ctx.officialBookingId!;
+    } else if (isLegitReference(portalTransactionReference)) {
+      authoritativeBookingRef = portalTransactionReference!;
+    }
+
+    // Strict validation: Authoritative booking reference must NOT be a Cart ID, plain text, or synthetic reference
+    const validOfficialReference = authoritativeBookingRef;
 
     // 3. Extract Receipt Reference if present
     const receiptMatch = bodyText.match(/(?:Receipt\s*(?:ID|No|Reference))[\s:]+([0-9A-Z]{6,30})/i);
