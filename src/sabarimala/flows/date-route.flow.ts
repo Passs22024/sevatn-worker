@@ -506,21 +506,77 @@ export class PostLoginDateRouteFlow {
   }
 
   /**
-   * Helper: Verifies canonical or display date representation
+   * Helper: Verifies canonical or display date representation, tolerating portal variations
+   * like D-M-YYYY, DD-MM-YYYY, YYYY-MM-DD, slashes, and unpadded days/months (e.g. "9-12-2026" vs "2026-12-09").
    */
-  private static matchesDate(inputVal: string, canonicalDate: string, displayDate?: string): boolean {
-    if (!inputVal) return false;
+  public static matchesDate(inputVal: string, canonicalDate: string, displayDate?: string): boolean {
+    if (!inputVal || !canonicalDate) return false;
     const clean = inputVal.trim();
     if (clean === canonicalDate || clean.includes(canonicalDate)) return true;
     if (displayDate && (clean === displayDate || clean.includes(displayDate))) return true;
 
-    // Check DD-MM-YYYY or DD/MM/YYYY
+    // Direct semantic date comparison: parse both into year, month, day integers
+    const parseYMD = (dStr: string): { y: number; m: number; d: number } | null => {
+      if (!dStr) return null;
+      const cleaned = dStr.split('T')[0].trim();
+      const p = cleaned.split(/[-/.]/);
+      if (p.length !== 3) return null;
+      let y: number, m: number, d: number;
+      if (p[0].length === 4) {
+        // YYYY-MM-DD
+        y = parseInt(p[0], 10);
+        m = parseInt(p[1], 10);
+        d = parseInt(p[2], 10);
+      } else if (p[2].length === 4) {
+        // DD-MM-YYYY or D-M-YYYY
+        d = parseInt(p[0], 10);
+        m = parseInt(p[1], 10);
+        y = parseInt(p[2], 10);
+      } else {
+        return null;
+      }
+      if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+      return { y, m, d };
+    };
+
+    const target = parseYMD(canonicalDate);
+    const actual = parseYMD(clean);
+
+    if (target && actual) {
+      if (target.y === actual.y && target.m === actual.m && target.d === actual.d) {
+        return true;
+      }
+    }
+
+    // Also check DD-MM-YYYY, D-M-YYYY, D/M/YYYY variations inside larger strings
     const parts = canonicalDate.split('-');
     if (parts.length === 3) {
-      const ddmmyyyy = `${parts[2]}-${parts[1]}-${parts[0]}`;
-      const ddmmyyyySlash = `${parts[2]}/${parts[1]}/${parts[0]}`;
-      if (clean.includes(ddmmyyyy) || clean.includes(ddmmyyyySlash)) return true;
+      const year = parts[0];
+      const monthNum = parseInt(parts[1], 10);
+      const dayNum = parseInt(parts[2], 10);
+      if (!isNaN(monthNum) && !isNaN(dayNum)) {
+        const dayPad = dayNum.toString().padStart(2, '0');
+        const dayUnpadded = dayNum.toString();
+        const monthPad = monthNum.toString().padStart(2, '0');
+        const monthUnpadded = monthNum.toString();
+
+        const variations = [
+          `${dayPad}-${monthPad}-${year}`,
+          `${dayPad}/${monthPad}/${year}`,
+          `${dayUnpadded}-${monthPad}-${year}`,
+          `${dayUnpadded}/${monthPad}/${year}`,
+          `${dayUnpadded}-${monthUnpadded}-${year}`,
+          `${dayUnpadded}/${monthUnpadded}/${year}`,
+          `${dayPad}-${monthUnpadded}-${year}`,
+          `${dayPad}/${monthUnpadded}/${year}`,
+        ];
+
+        for (const v of variations) {
+          if (clean.includes(v)) return true;
+        }
+      }
     }
+
     return false;
   }
 }
