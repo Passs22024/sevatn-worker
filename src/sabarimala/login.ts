@@ -118,43 +118,52 @@ export class SabarimalaLoginFlow {
         return { status: 'SITE_ERROR', message: 'Unable to click login button' };
       }
 
-      // 5. Wait and inspect response state
-      await page.waitForTimeout(2500);
+      // 5. Wait for portal request/response processing and allow UI to render post-login state
+      await page.waitForTimeout(2000);
 
-      // Check OTP challenge
-      for (const otpSel of SABARIMALA_SELECTORS.login.otpPrompt) {
-        if (await page.locator(otpSel).first().isVisible({ timeout: 1000 }).catch(() => false)) {
-          return { status: 'OTP_REQUIRED', message: 'Official website requires OTP verification.' };
+      // Retry loop (up to 3 attempts, 2 seconds each) to allow SPA rendering or redirection
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        // Check OTP challenge
+        for (const otpSel of SABARIMALA_SELECTORS.login.otpPrompt) {
+          if (await page.locator(otpSel).first().isVisible({ timeout: 500 }).catch(() => false)) {
+            return { status: 'OTP_REQUIRED', message: 'Official website requires OTP verification.' };
+          }
         }
-      }
 
-      // Check CAPTCHA challenge
-      for (const capSel of SABARIMALA_SELECTORS.login.captchaContainer) {
-        if (await page.locator(capSel).first().isVisible({ timeout: 1000 }).catch(() => false)) {
-          return { status: 'CAPTCHA_REQUIRED', message: 'Official website presented a CAPTCHA challenge.' };
+        // Check CAPTCHA challenge
+        for (const capSel of SABARIMALA_SELECTORS.login.captchaContainer) {
+          if (await page.locator(capSel).first().isVisible({ timeout: 500 }).catch(() => false)) {
+            return { status: 'CAPTCHA_REQUIRED', message: 'Official website presented a CAPTCHA challenge.' };
+          }
         }
-      }
 
-      // Check error message
-      for (const errSel of SABARIMALA_SELECTORS.login.errorMessage) {
-        const errEl = page.locator(errSel).first();
-        if (await errEl.isVisible({ timeout: 1000 }).catch(() => false)) {
-          const txt = await errEl.textContent().catch(() => 'Invalid credentials');
-          return { status: 'INVALID_CREDENTIALS', message: txt?.trim() || 'Invalid username or password' };
+        // Check explicit error message from portal
+        for (const errSel of SABARIMALA_SELECTORS.login.errorMessage) {
+          const errEl = page.locator(errSel).first();
+          if (await errEl.isVisible({ timeout: 500 }).catch(() => false)) {
+            const txt = await errEl.textContent().catch(() => 'Invalid credentials');
+            return { status: 'INVALID_CREDENTIALS', message: txt?.trim() || 'Invalid username or password' };
+          }
         }
-      }
 
-      // Check for successful authentication indicators
-      for (const welcomeSel of SABARIMALA_SELECTORS.login.welcomeIndicators) {
-        if (await page.locator(welcomeSel).first().isVisible({ timeout: 2000 }).catch(() => false)) {
-          SanitizedLogger.info('Login successfully confirmed with official welcome state.');
-          return { status: 'LOGIN_SUCCESS', message: 'Authenticated successfully' };
+        // Check for successful authentication indicators (Logout button, user profile, dashboard widget)
+        for (const welcomeSel of SABARIMALA_SELECTORS.login.welcomeIndicators) {
+          if (await page.locator(welcomeSel).first().isVisible({ timeout: 1000 }).catch(() => false)) {
+            SanitizedLogger.info(`Login successfully confirmed with indicator: "${welcomeSel}"`);
+            return { status: 'LOGIN_SUCCESS', message: 'Authenticated successfully' };
+          }
         }
-      }
 
-      // If URL redirected away from /login
-      if (!page.url().includes('/login')) {
-        return { status: 'LOGIN_SUCCESS', message: 'Authenticated successfully (URL redirected)' };
+        // Check URL redirection
+        const currentUrl = page.url();
+        if (!currentUrl.includes('/login')) {
+          SanitizedLogger.info(`Login successfully confirmed via URL redirection: ${currentUrl}`);
+          return { status: 'LOGIN_SUCCESS', message: 'Authenticated successfully (URL redirected)' };
+        }
+
+        if (attempt < 3) {
+          await page.waitForTimeout(2000);
+        }
       }
 
       return { status: 'UNKNOWN', message: 'Login state unconfirmed. Please verify credentials.' };

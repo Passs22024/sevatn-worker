@@ -242,7 +242,9 @@ export class SabarimalaDarshanAvailabilityFlow {
     }
 
     await availableCell.first().click();
-    await page.waitForTimeout(1000);
+    if (!page.isClosed()) {
+      await page.waitForTimeout(1000).catch(() => {});
+    }
 
     SanitizedLogger.info(`[AVAILABILITY] Requested date: ${canonicalDate}`);
     SanitizedLogger.info(`[AVAILABILITY] Date selected successfully: ${canonicalDate}`);
