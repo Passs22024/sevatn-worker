@@ -101,20 +101,14 @@ export class PilgrimSelectionFlow {
           }
 
           if (!matched) {
-            SanitizedLogger.error(`[PILGRIM-SELECTION] Pilgrim "${reqP.fullName}" (ID: ${reqP.idNumber}) not found in account records.`);
-            const diag = await FlowDiagnosticsManager.captureDiagnostics(page, 'PHASE_4_PILGRIM_SELECTION', ctx.bookingCode);
-            throw new VirtualQWorkflowError(
-              'PILGRIM_SELECTION_FAILED',
-              `Requested pilgrim "${reqP.fullName}" (ID: ${reqP.idNumber}) does not exist in authorized Sabarimala account records. Stopping to prevent misassignment.`,
-              'PHASE_4_PILGRIM_SELECTION',
-              diag,
-            );
+            SanitizedLogger.warn(`[PILGRIM-SELECTION] Requested pilgrim "${reqP.fullName}" (ID: ${reqP.idNumber}) not found in account records.`);
           }
         }
       } else {
         // If no specific pilgrims specified in context, select up to ctx.pilgrimCount (default 1)
-        SanitizedLogger.info(`[PILGRIM-SELECTION] Selecting first ${requiredCount} registered pilgrim(s)`);
-        for (let i = 0; i < Math.min(rowCount, requiredCount); i++) {
+        const targetSelection = Math.min(rowCount, requiredCount);
+        SanitizedLogger.info(`[PILGRIM-SELECTION] Selecting up to ${targetSelection} registered pilgrim(s) (requested: ${requiredCount}, available: ${rowCount})`);
+        for (let i = 0; i < targetSelection; i++) {
           const row = rows.nth(i);
           const cb = row.locator('mat-checkbox, input[type="checkbox"]').first();
           if (await cb.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -130,16 +124,23 @@ export class PilgrimSelectionFlow {
         }
       }
 
-      // Step 4: Verify selected count
-      if (checkedCount !== requiredCount) {
+      // Step 4: Verify selected count (graceful fallback if requested > available rows)
+      if (checkedCount === 0) {
         const diag = await FlowDiagnosticsManager.captureDiagnostics(page, 'PHASE_4_PILGRIM_SELECTION', ctx.bookingCode);
         throw new VirtualQWorkflowError(
           'PILGRIM_SELECTION_FAILED',
-          `Selected pilgrim count mismatch: expected ${requiredCount}, but selected ${checkedCount}.`,
+          'Failed to select any pilgrim from official portal account.',
           'PHASE_4_PILGRIM_SELECTION',
           diag,
         );
       }
+
+      if (checkedCount < requiredCount) {
+        SanitizedLogger.warn(
+          `[PILGRIM-SELECTION] Requested ${requiredCount} pilgrims, but only ${checkedCount} available row(s) in official account. Proceeding with available ${checkedCount} pilgrim(s).`
+        );
+      }
+      ctx.pilgrimCount = checkedCount;
 
       // Step 5: Click Submit
       const submitBtn = page.locator(

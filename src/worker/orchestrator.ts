@@ -21,11 +21,16 @@ export class WorkerOrchestrator {
     private apiClient: ApiClient,
     private heartbeat: HeartbeatService,
     private checkIntervalMs: number = 5000,
-    private discoveryIntervalMs: number = 15000,
+    private discoveryIntervalMs: number = 30000,
   ) {
     this.verificationWorker = new VerificationWorker(apiClient);
     this.bookingWorker = new BookingWorker(apiClient);
-    this.discoveryWorker = new AvailabilityDiscoveryWorker(apiClient);
+    this.discoveryWorker = new AvailabilityDiscoveryWorker(
+      apiClient,
+      (jobType: string, job: any) => {
+        this.dispatchSnipedJob(jobType, job);
+      }
+    );
 
     this.maxActiveBookings = parseInt(process.env.MAX_ACTIVE_BOOKINGS || '3', 10);
     this.maxAvailabilityMonitors = parseInt(process.env.MAX_AVAILABILITY_MONITORS || '2', 10);
@@ -166,11 +171,43 @@ export class WorkerOrchestrator {
           if (this.activeExecutions === 0) {
             this.heartbeat.setStatus('IDLE');
           }
+          await new Promise((resolve) => setTimeout(resolve, Math.max(5000, this.checkIntervalMs)));
+          continue;
         }
       }
 
       await new Promise((resolve) => setTimeout(resolve, this.checkIntervalMs));
     }
+  }
+
+  /**
+   * Fast-dispatch sniped booking from Cancellation Sniper directly into execution pipeline
+   */
+  public dispatchSnipedJob(jobType: string, job: any) {
+    if (this.activeExecutions >= this.maxActiveBookings) {
+      SanitizedLogger.warn(
+        `[Worker] Sniped job #${job.id} for booking #${job.bookingCode || job.id} received, but worker is at max concurrency (${this.activeExecutions}/${this.maxActiveBookings}).`
+      );
+      return;
+    }
+
+    const bookingKey = job.bookingRequestId || job.bookingCode || job.id;
+    if (BookingExecutionGuard.isBookingActive(bookingKey) || this.activeJobIds.has(job.id)) {
+      SanitizedLogger.warn(
+        `[Worker] Deduplication: Sniped job #${job.id} for booking #${job.bookingCode || bookingKey} is already active. Skipping duplicate dispatch.`
+      );
+      return;
+    }
+
+    this.activeExecutions++;
+    this.activeJobIds.add(job.id);
+    SanitizedLogger.info(`[Worker] ⚡ Fast-dispatching sniped booking #${job.bookingCode || job.id} directly to execution engine!`);
+    this.processJobAsync(jobType, {
+      ...job,
+      dispatchSource: 'SNIPER',
+      verifiedAvailable: true,
+      skipPreflight: true,
+    });
   }
 
   private async processJobAsync(jobType: string, job: any) {

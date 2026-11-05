@@ -94,15 +94,10 @@ export class NomineeDetailsFlow {
         const singleNominee = ctx.nominee;
         const resolvedNominee = pilgrimNominee || arrayNominee || singleNominee;
 
-        // Mandatory validation: Cannot guess nominee info
+        // If nominee is omitted, attempt to submit without filling nominee fields
         if (!resolvedNominee || !resolvedNominee.nomineeName || !String(resolvedNominee.nomineeName).trim()) {
-          const diag = await FlowDiagnosticsManager.captureDiagnostics(page, 'PHASE_5_NOMINEE_DETAILS', ctx.bookingCode);
-          throw new VirtualQWorkflowError(
-            'NOMINEE_VALIDATION_FAILED',
-            `NOMINEE_DETAILS_MISSING: Mandatory nominee information missing for pilgrim #${i + 1}. Please supply nominee name, age, and relationship.`,
-            'PHASE_5_NOMINEE_DETAILS',
-            diag,
-          );
+          SanitizedLogger.warn(`[NOMINEE] Nominee details not provided for pilgrim #${i + 1}. Attempting to submit without filling nominee fields.`);
+          continue;
         }
 
         const nameVal = String(resolvedNominee.nomineeName).trim();

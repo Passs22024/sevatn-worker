@@ -34,6 +34,7 @@ describe('TicketAssist Booking Worker Sequence & Flow Regression Suite', () => {
       nomineeRelationship: 'Spouse',
       nomineePhone: '9876543210',
     },
+    verifiedAvailable: true,
   };
 
   beforeEach(() => {
@@ -422,5 +423,35 @@ describe('TicketAssist Booking Worker Sequence & Flow Regression Suite', () => {
     // Must proceed directly to payment gateway
     expect(mockAdapter.proceedToPaymentGateway).toHaveBeenCalled();
     expect(mockApiClient.completeJob).toHaveBeenCalledWith('job-001', expect.any(Object));
+  });
+
+  it('18. Pre-flight check: aborts login early if unverified date is unavailable on portal', async () => {
+    mockAdapter.checkRequestedDateAvailability.mockResolvedValue({
+      available: false,
+      state: 'FULL',
+    });
+
+    const unverifiedJob: BookingJobData = {
+      ...sampleJob,
+      id: 'job-unverified',
+      verifiedAvailable: false,
+    };
+
+    const worker = new BookingWorker(mockApiClient);
+    await worker.execute(unverifiedJob);
+
+    // Pre-flight check must be performed
+    expect(mockAdapter.openDarshanAvailability).toHaveBeenCalled();
+    expect(mockAdapter.checkRequestedDateAvailability).toHaveBeenCalledWith('2026-10-20');
+
+    // Login must NOT be called
+    expect(mockAdapter.openLogin).not.toHaveBeenCalled();
+    expect(mockAdapter.login).not.toHaveBeenCalled();
+
+    // Job must fail with DATE_UNAVAILABLE
+    expect(mockApiClient.failJob).toHaveBeenCalledWith('job-unverified', expect.objectContaining({
+      status: 'DATE_UNAVAILABLE',
+      errorCode: 'DATE_UNAVAILABLE',
+    }));
   });
 });

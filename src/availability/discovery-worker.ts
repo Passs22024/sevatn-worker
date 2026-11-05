@@ -7,7 +7,16 @@ import { normalizeDemandKey } from './demand-key';
 export class AvailabilityDiscoveryWorker {
   private isChecking = false;
 
-  constructor(private apiClient: ApiClient) {}
+  // Task 1: In-memory cache for confirmed available dates
+  public availableDatesSet: Set<string> = new Set<string>();
+
+  // Task 4: In-memory cache for backoff on failed/FULL dates (Map<date, nextCheckTime>)
+  public failedDateBackoffMap: Map<string, number> = new Map<string, number>();
+
+  constructor(
+    private apiClient: ApiClient,
+    private onBookingSniped?: (jobType: string, job: any) => void,
+  ) {}
 
   /**
    * Executes an intelligent, distributed-throttled discovery pass across active demand dates.
@@ -29,23 +38,57 @@ export class AvailabilityDiscoveryWorker {
 
     try {
       // 1. Fetch active demand dates with schedule state from API
-      const demandGroups = await this.apiClient.getDemandDates();
+      let demandGroups: any[] = [];
+      try {
+        demandGroups = await this.apiClient.getDemandDates();
+      } catch (err: any) {
+        SanitizedLogger.warn(`[DISCOVERY] Failed to fetch demand dates: ${err.message}`);
+      }
+
+      // Supplementary fallback: check getPendingDates if demandGroups is empty
+      if (!demandGroups || demandGroups.length === 0) {
+        try {
+          if (typeof this.apiClient.getPendingDates === 'function') {
+            const pending = await this.apiClient.getPendingDates();
+            if (pending?.dates && pending.dates.length > 0) {
+              demandGroups = pending.dates.map((d: string) => ({
+                date: d,
+                route: 'Pamba (Regular Footpath Route)',
+                pendingCount: 1,
+              }));
+            }
+          }
+        } catch (_) {}
+      }
+
       if (!demandGroups || demandGroups.length === 0) {
         SanitizedLogger.info('[DISCOVERY] No pending bookings. Monitor idle.');
         return;
       }
 
-      // 2. Identify due demands
-      const dueDemands = demandGroups.filter((g: any) => g.isDue !== false);
+      // 2. Identify due demands (Task 4: Enforce 5-minute backoff on failed/FULL dates)
+      const now = Date.now();
+      const dueDemands = demandGroups.filter((g: any) => {
+        const canonical = normalizeDate(g.date);
+        const nextCheckTime = this.failedDateBackoffMap.get(canonical);
+        if (nextCheckTime && now < nextCheckTime) {
+          const remainingSec = Math.round((nextCheckTime - now) / 1000);
+          SanitizedLogger.info(
+            `[DISCOVERY] Date ${canonical} in 5-min backoff (${remainingSec}s remaining). Skipping.`
+          );
+          return false;
+        }
+        return g.isDue !== false;
+      });
 
       if (dueDemands.length === 0) {
-        // All active demands are within their scheduled intervals. Skip browser launch completely.
+        // All active demands are within their scheduled intervals or 5-min backoff. Skip browser launch completely.
         const nextUpcoming = demandGroups
           .filter((g: any) => g.nextCheckAt)
           .sort((a: any, b: any) => (a.nextCheckAt > b.nextCheckAt ? 1 : -1))[0];
 
         SanitizedLogger.info(
-          `[DISCOVERY] No demand dates due for inspection (all within scheduled intervals). Browser launch skipped. Next due: ${nextUpcoming?.demandKey || 'none'} at ${nextUpcoming?.nextCheckAt || 'N/A'}`
+          `[DISCOVERY] No demand dates due for inspection (all in backoff or within scheduled intervals). Browser launch skipped. Next due: ${nextUpcoming?.demandKey || 'none'} at ${nextUpcoming?.nextCheckAt || 'N/A'}`
         );
         return;
       }
@@ -109,6 +152,10 @@ export class AvailabilityDiscoveryWorker {
           const checkResult = await adapter.checkRequestedDateAvailability(canonicalDate);
 
           if (checkResult.available) {
+            // Task 1: Store available date in local in-memory cache & clear backoff
+            this.availableDatesSet.add(canonicalDate);
+            this.failedDateBackoffMap.delete(canonicalDate);
+
             try {
               // Select date
               await adapter.selectRequestedDate(canonicalDate);
@@ -124,6 +171,24 @@ export class AvailabilityDiscoveryWorker {
                 source: 'SABARIMALA_DARSHAN_AVAILABILITY',
               });
 
+              // Task 2: Cancellation Sniping - Instantly grab oldest pending booking for this date
+              if (typeof this.apiClient.matchPending === 'function') {
+                try {
+                  SanitizedLogger.info(`[SNIPER] 🎯 Date ${canonicalDate} is AVAILABLE! Triggering cancellation sniping via match-pending...`);
+                  const matchRes = await this.apiClient.matchPending(canonicalDate, verifiedRoute);
+                  if (matchRes && matchRes.hasJob && matchRes.job) {
+                    SanitizedLogger.info(`[SNIPER] 🚀 Successfully claimed sniped booking #${matchRes.job.bookingCode || matchRes.job.id} for ${canonicalDate}! Dispatching execution.`);
+                    if (this.onBookingSniped) {
+                      this.onBookingSniped(matchRes.jobType || 'BOOKING_EXECUTION', matchRes.job);
+                    }
+                  } else {
+                    SanitizedLogger.info(`[SNIPER] No claimable pending booking for ${canonicalDate} (claimed by peer worker or none remaining).`);
+                  }
+                } catch (snipeErr: any) {
+                  SanitizedLogger.warn(`[SNIPER] match-pending claim error for ${canonicalDate}: ${snipeErr.message}`);
+                }
+              }
+
               if (typeof this.apiClient.releaseDemand === 'function') {
                 await this.apiClient.releaseDemand(demandKey, workerId, 'AVAILABLE', Date.now() - scanStartTime);
               }
@@ -134,7 +199,13 @@ export class AvailabilityDiscoveryWorker {
               }
             }
           } else {
-            SanitizedLogger.info(`[DISCOVERY] demandKey=${demandKey} result=UNAVAILABLE state=${checkResult.state}`);
+            // Task 4: Date is FULL / UNAVAILABLE. Apply 5-minute backoff cache
+            this.availableDatesSet.delete(canonicalDate);
+            this.failedDateBackoffMap.set(canonicalDate, Date.now() + 5 * 60 * 1000);
+
+            SanitizedLogger.info(
+              `[DISCOVERY] 🔴 Date ${canonicalDate} is FULL/UNAVAILABLE (${checkResult.state}). 5-minute backoff applied.`
+            );
             if (typeof this.apiClient.releaseDemand === 'function') {
               await this.apiClient.releaseDemand(demandKey, workerId, 'UNAVAILABLE', Date.now() - scanStartTime);
             }

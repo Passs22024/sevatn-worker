@@ -87,6 +87,22 @@ export class ApiClient {
     return res.data;
   }
 
+  async getPendingDates(): Promise<{ dates: string[] }> {
+    if (!this.hasToken()) {
+      throw new Error('Worker machine token missing; getPendingDates aborted');
+    }
+    const res = await this.client.get('/workers/pending-dates');
+    return res.data;
+  }
+
+  async matchPending(date: string, route?: string): Promise<{ hasJob: boolean; jobType?: string; job?: any }> {
+    if (!this.hasToken()) {
+      throw new Error('Worker machine token missing; matchPending aborted');
+    }
+    const res = await this.client.post('/workers/match-pending', { date, route });
+    return res.data;
+  }
+
   async updateJobProgress(jobId: string, data: {
     status: string;
     note?: string;

@@ -183,5 +183,45 @@ describe('AvailabilityDiscoveryWorker Pre-Login Date-Only Discovery Suite', () =
     expect(publishedList[0].timeSlot).toBeUndefined();
     expect(mockAdapter.close).toHaveBeenCalled();
   });
+
+  it('8. Cancellation Sniping: when date is available, calls matchPending and invokes onBookingSniped callback', async () => {
+    (mockApiClient as any).matchPending = jest.fn().mockResolvedValue({
+      hasJob: true,
+      jobType: 'BOOKING_EXECUTION',
+      job: { id: 'sniped-job-1', bookingCode: 'TA-SNIPED-01', requestedDate: '2026-10-20' },
+    });
+
+    const onBookingSnipedMock = jest.fn();
+    const discoveryWorker = new AvailabilityDiscoveryWorker(mockApiClient, onBookingSnipedMock);
+    await discoveryWorker.runDiscoveryPass();
+
+    expect(discoveryWorker.availableDatesSet.has('2026-10-20')).toBe(true);
+    expect((mockApiClient as any).matchPending).toHaveBeenCalledWith('2026-10-20', 'Pamba - Marakkoottam - 4 Kms');
+    expect(onBookingSnipedMock).toHaveBeenCalledWith('BOOKING_EXECUTION', expect.objectContaining({ id: 'sniped-job-1' }));
+  });
+
+  it('9. Backoff on Failed Dates: when date is FULL, records 5-minute backoff and skips inspection on subsequent pass', async () => {
+    mockAdapter.checkRequestedDateAvailability.mockResolvedValue({
+      available: false,
+      state: 'DISABLED',
+      message: 'Date full',
+    });
+
+    const discoveryWorker = new AvailabilityDiscoveryWorker(mockApiClient);
+
+    // Pass 1: checks date and marks it FULL
+    await discoveryWorker.runDiscoveryPass();
+    expect(mockAdapter.checkRequestedDateAvailability).toHaveBeenCalledTimes(1);
+    expect(discoveryWorker.availableDatesSet.has('2026-10-20')).toBe(false);
+
+    const backoffTime = discoveryWorker.failedDateBackoffMap.get('2026-10-20');
+    expect(backoffTime).toBeDefined();
+    expect(backoffTime).toBeGreaterThan(Date.now() + 4 * 60 * 1000); // at least 4-5 mins ahead
+
+    // Pass 2: immediate second pass skips browser check due to 5-minute backoff
+    mockAdapter.init.mockClear();
+    await discoveryWorker.runDiscoveryPass();
+    expect(mockAdapter.init).not.toHaveBeenCalled();
+  });
 });
 

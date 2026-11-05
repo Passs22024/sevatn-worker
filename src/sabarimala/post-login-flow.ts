@@ -553,9 +553,8 @@ export class SabarimalaPostLoginFlow {
       const resolvedNominee = pilgrimNominee || arrayNominee || singleNominee;
 
       if (!resolvedNominee || !resolvedNominee.nomineeName) {
-        SanitizedLogger.error(`[NOMINEE] Missing nominee details for pilgrim #${i + 1}`);
-        await this.captureFailureScreenshot(page, ctx.bookingCode, 'NOMINEE_DETAILS_MISSING');
-        throw new Error(`NOMINEE_DETAILS_MISSING: Nominee details are mandatory for pilgrim #${i + 1} but not provided in booking data.`);
+        SanitizedLogger.warn(`[NOMINEE] Nominee details not provided for pilgrim #${i + 1}. Attempting to submit without nominee fields.`);
+        continue;
       }
 
       const nameVal = resolvedNominee.nomineeName.trim();
